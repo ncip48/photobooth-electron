@@ -24,9 +24,14 @@ const router = createRouter({
             component: () => import('@/pages/Payment.vue'),
         },
         {
-            path: '/capture/:sessionId',
+            path: '/capture/:sessionId/:templateId?',
             name: 'capture',
             component: () => import('@/pages/Capture.vue'),
+        },
+        {
+            path: '/select-frame/:sessionId',
+            name: 'select-frame',
+            component: () => import('@/pages/SelectFrame.vue'),
         },
         {
             path: '/editor/:sessionId',

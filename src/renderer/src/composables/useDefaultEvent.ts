@@ -10,7 +10,8 @@ export interface PhotoboothEvent {
     code?: string | null
     location?: string | null
     is_active?: boolean
-    is_paid_event?: boolean
+    is_paid_event: boolean
+    is_simple: boolean
     background_url?: string | null
     [key: string]: any
 }

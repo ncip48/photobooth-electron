@@ -41,11 +41,19 @@ const startSession = () => {
             },
         })
     } else {
-        const sessionId = '01a0179e-a690-7141-8c3b-4aecc12936cb'
-        router.push({
-            name: 'capture',
-            params: { sessionId: sessionId ? String(sessionId) : undefined },
-        })
+        if (activeEvent.value?.is_simple) {
+            const sessionId = '01a0179e-a690-7141-8c3b-4aecc12936cb'
+            router.push({
+                name: 'select-frame',
+                params: { sessionId: sessionId ? String(sessionId) : undefined },
+            })
+        } else {
+            const sessionId = '01a0179e-a690-7141-8c3b-4aecc12936cb'
+            router.push({
+                name: 'capture',
+                params: { sessionId: sessionId ? String(sessionId) : undefined },
+            })
+        }
     }
 }
 
