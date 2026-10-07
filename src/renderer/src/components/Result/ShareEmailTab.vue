@@ -4,6 +4,7 @@ import {
     EnvelopeIcon,
     CheckCircleIcon,
     ExclamationTriangleIcon,
+    PaperAirplaneIcon
 } from '@heroicons/vue/24/outline'
 
 const props = withDefaults(
@@ -80,6 +81,44 @@ function submit() {
                 <EnvelopeIcon class="h-5 w-5" :class="emailSending && 'animate-pulse'" />
                 {{ emailSending ? 'Mengirim...' : 'Kirim Email' }}
             </button>
+
+            <div class="mt-4 space-y-3">
+                <div class="flex items-center gap-2">
+                    <PaperAirplaneIcon class="h-4 w-4 text-ink/60" />
+                    <p class="display text-[11px] font-bold tracking-wider text-ink/60 uppercase">
+                        Yang akan dikirim
+                    </p>
+                </div>
+
+                <div class="border-2 border-ink bg-white">
+                    <div class="flex items-center gap-3 border-b-2 border-ink bg-paper-soft p-3">
+                        <div class="flex h-8 w-8 shrink-0 items-center justify-center border-2 border-ink bg-lime">
+                            <EnvelopeIcon class="h-4 w-4 text-ink" />
+                        </div>
+                        <div class="min-w-0 flex-1">
+                            <p class="truncate text-[12px] font-bold text-ink">Link sesi kamu</p>
+                            <p class="text-[10px] text-ink/50">dari sistem</p>
+                        </div>
+                    </div>
+
+                    <div class="space-y-2 p-3">
+                        <p class="text-[11px] leading-relaxed text-ink/70">
+                            Halo, berikut link sesi yang bisa kamu akses:
+                        </p>
+                        <div class="flex items-center gap-2 border-2 border-ink bg-paper-soft p-2">
+                            <LinkIcon class="h-3.5 w-3.5 shrink-0 text-ink/60" />
+                            <span class="truncate text-[11px] font-bold text-ink">{{ displayUrl }}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex items-start gap-3 border-2 border-ink border-dashed bg-paper-soft p-3">
+                    <InformationCircleIcon class="mt-0.5 h-4 w-4 shrink-0 text-ink/70" />
+                    <p class="text-[11px] leading-relaxed text-ink/60">
+                        Email berisi link sesi. Pastikan alamat email penerima sudah benar sebelum dikirim.
+                    </p>
+                </div>
+            </div>
         </template>
     </div>
 </template>

@@ -110,7 +110,7 @@ onBeforeUnmount(() => {
 
         <!-- Main grid -->
         <main
-            class="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden p-4 pt-20 sm:gap-5 sm:p-6 sm:pt-24 lg:grid-cols-[440px_minmax(0,1fr)] lg:justify-center">
+            class="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden p-4 pt-20 sm:gap-5 sm:p-6 sm:pt-24 lg:grid-cols-[530px_minmax(0,1fr)] lg:justify-center">
             <!-- KIRI: Photostrip -->
             <PhotostripPreview :photostrip="photostrip" :event-title="event?.title" :loading="isLoading" />
 

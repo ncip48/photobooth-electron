@@ -40,31 +40,29 @@ function onSendEmail(email: string) {
         <div class="flex shrink-0 border-b-2 border-ink" role="tablist">
             <button type="button" role="tab"
                 class="display flex flex-1 items-center justify-center gap-2.5 border-r-2 border-ink px-4 py-3.5 text-[13px] font-bold transition-colors"
-                :class="activeTab === 'qr'
-                        ? 'bg-ink text-white'
-                        : 'bg-paper-soft text-ink hover:bg-lime'
-                    " :aria-selected="activeTab === 'qr'" @click="activeTab = 'qr'">
+                :class="activeTab === 'qr' ? 'bg-ink text-white' : 'bg-paper-soft text-ink hover:bg-lime'"
+                :aria-selected="activeTab === 'qr'" @click="activeTab = 'qr'">
                 <QrCodeIcon class="h-4 w-4" />
                 QR Code
             </button>
 
             <button type="button" role="tab"
                 class="display flex flex-1 items-center justify-center gap-2.5 px-4 py-3.5 text-[13px] font-bold transition-colors"
-                :class="activeTab === 'email'
-                        ? 'bg-ink text-white'
-                        : 'bg-paper-soft text-ink hover:bg-lime'
-                    " :aria-selected="activeTab === 'email'" @click="activeTab = 'email'">
+                :class="activeTab === 'email' ? 'bg-ink text-white' : 'bg-paper-soft text-ink hover:bg-lime'"
+                :aria-selected="activeTab === 'email'" @click="activeTab = 'email'">
                 <EnvelopeIcon class="h-4 w-4" />
                 Email
             </button>
         </div>
 
         <!-- Body -->
-        <div class="min-h-0 flex-1 overflow-y-auto p-5">
+        <div class="flex min-h-0 flex-1 flex-col p-4">
             <ShareQrTab v-if="activeTab === 'qr'" :qr-url="qrUrl" :public-url="publicUrl" :loading="loading" />
 
-            <ShareEmailTab v-else :email-sending="emailSending" :email-sent="emailSent" :email-message="emailMessage"
-                :email-error="emailError" :loading="loading" @submit="onSendEmail" />
+            <div v-else class="min-h-0 flex-1 overflow-y-auto">
+                <ShareEmailTab :email-sending="emailSending" :email-sent="emailSent" :email-message="emailMessage"
+                    :email-error="emailError" :loading="loading" @submit="onSendEmail" />
+            </div>
         </div>
     </div>
 </template>
