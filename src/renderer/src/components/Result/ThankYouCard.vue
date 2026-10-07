@@ -2,20 +2,24 @@
 import { SparklesIcon } from '@heroicons/vue/24/outline'
 import ResultHeader from '@/components/Result/ResultHeader.vue'
 
-withDefaults(
+const props = withDefaults(
     defineProps<{
         mmss?: string | null
         isExpired?: boolean
         isLowTime?: boolean
         loading?: boolean
+        simpleMode?: boolean
     }>(),
     {
-        mmss: '00:00',
+        mmss: null,
         isExpired: false,
         isLowTime: false,
         loading: false,
+        simpleMode: false,
     }
 )
+
+console.log(props.mmss, props.simpleMode)
 </script>
 
 <template>
@@ -32,7 +36,9 @@ withDefaults(
                     </p>
                 </div>
                 <!-- Timer -->
-                <ResultHeader :mmss="mmss" :is-expired="isExpired" :is-low-time="isLowTime" :loading="loading" />
+                <template v-if="!simpleMode">
+                    <ResultHeader :mmss="mmss" :is-expired="isExpired" :is-low-time="isLowTime" :loading="loading" />
+                </template>
             </div>
         </div>
 

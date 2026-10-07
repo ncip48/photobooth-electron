@@ -120,36 +120,66 @@ export function useResultActions(sessionId: Ref<string>) {
    Countdown
    ========================================================= */
 export function useResultCountdown(
-    totalSeconds: Ref<number>,
-    onExpired: () => void
+    totalSeconds: Ref<number | null>,
+    onExpired: () => void,
+    enabled: Ref<boolean>
 ) {
-    const remaining = ref(totalSeconds.value)
+    const remaining = ref<number | null>(null)
     let timer: ReturnType<typeof setInterval> | null = null
-    let started = false
 
     const mmss = computed(() => {
+        if (!enabled.value || remaining.value === null) {
+            return null
+        }
+
         const m = Math.floor(remaining.value / 60)
         const s = remaining.value % 60
+
         return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
     })
 
-    const isExpired = computed(() => remaining.value <= 0)
-    const isLowTime = computed(
-        () => remaining.value <= 30 && remaining.value > 0
-    )
+    const isExpired = computed(() => {
+        return (
+            enabled.value &&
+            remaining.value !== null &&
+            remaining.value <= 0
+        )
+    })
+
+    const isLowTime = computed(() => {
+        return (
+            enabled.value &&
+            remaining.value !== null &&
+            remaining.value <= 30 &&
+            remaining.value > 0
+        )
+    })
 
     function start(seconds?: number) {
-        if (started) return
-        if (seconds) remaining.value = seconds
-        started = true
+        if (!enabled.value) {
+            stop()
+            return
+        }
+
+        // Jangan start dua kali
+        if (timer) return
+
+        const value = seconds ?? totalSeconds.value
+
+        if (value === null || value <= 0) {
+            return
+        }
+
+        remaining.value = value
 
         timer = setInterval(() => {
-            if (remaining.value > 0) {
+            if (remaining.value !== null && remaining.value > 0) {
                 remaining.value--
-            } else {
-                stop()
-                onExpired()
+                return
             }
+
+            stop()
+            onExpired()
         }, 1000)
     }
 
@@ -160,5 +190,12 @@ export function useResultCountdown(
         }
     }
 
-    return { remaining, mmss, isExpired, isLowTime, start, stop }
+    return {
+        remaining,
+        mmss,
+        isExpired,
+        isLowTime,
+        start,
+        stop,
+    }
 }

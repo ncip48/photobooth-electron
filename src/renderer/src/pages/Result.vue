@@ -11,6 +11,7 @@ import {
     useResultActions,
     useResultCountdown,
 } from '@/composables/useResult'
+import { useActiveEvent } from '@/composables/useEvents'
 
 const route = useRoute()
 const router = useRouter()
@@ -22,17 +23,35 @@ const sessionId = computed(() => route.params.sessionId as string)
    ========================================================= */
 const { data: result, isLoading } = useResultData(sessionId)
 
+const { data: event, isLoading: eventLoading } = useActiveEvent()
+
 const photostrip = computed(() => result.value?.photostrip ?? null)
-const event = computed(() => result.value?.event ?? null)
+// const event = computed(() => result.value?.event ?? null)
 const publicUrl = computed(() => result.value?.public_url ?? '')
 const qrUrl = computed(() => result.value?.qr_url ?? '')
 
 /* =========================================================
    Simple mode
    ========================================================= */
-const isSimpleMode = computed(() => {
-    return Boolean(event.value?.is_simple)
+const isSimpleMode = computed(() => event.value?.is_simple === true)
+
+const totalSeconds = computed<number | null>(() => {
+    if (!event.value) {
+        return null
+    }
+
+    if (isSimpleMode.value) {
+        return null
+    }
+
+    return event.value.time_download ?? 300
 })
+
+const countdownEnabled = computed(() => {
+    return event.value !== null && !isSimpleMode.value
+})
+
+console.log(event.value)
 
 /* =========================================================
    Actions
@@ -50,11 +69,6 @@ const {
 /* =========================================================
    Countdown
    ========================================================= */
-const totalSeconds = computed(() => {
-    if (isSimpleMode.value) return 0
-
-    return event.value?.time_download ?? 300
-})
 
 const handleExpired = async () => {
     // Simple mode tidak memiliki auto-finish dari timer
@@ -74,7 +88,7 @@ const {
     isLowTime: countdownLowTime,
     start: startCountdown,
     stop: stopCountdown,
-} = useResultCountdown(totalSeconds, handleExpired)
+} = useResultCountdown(totalSeconds, handleExpired, countdownEnabled)
 
 /*
  * Expose state yang aman untuk UI.
@@ -97,17 +111,24 @@ const isLowTime = computed(() => {
    Mulai countdown saat data siap
    ========================================================= */
 watch(
-    result,
-    (val) => {
-        // Simple mode: JANGAN START TIMER
-        if (isSimpleMode.value) {
+    event,
+    (evt) => {
+        // Event belum siap
+        if (!evt) {
             stopCountdown()
             return
         }
 
-        if (val && totalSeconds.value > 0) {
-            startCountdown(totalSeconds.value)
+        // Simple mode → tidak ada timer
+        if (evt.is_simple === true) {
+            stopCountdown()
+            return
         }
+
+        // Normal mode → mulai timer
+        const seconds = evt.time_download ?? 300
+
+        startCountdown(seconds)
     },
     { immediate: true }
 )
@@ -151,8 +172,9 @@ onBeforeUnmount(() => {
             <!-- KANAN: Ucapan + Share + Warning + Selesai -->
             <aside class="flex min-h-0 flex-col gap-4">
 
-                <ThankYouCard :mmss="isSimpleMode ? null : mmss" :is-expired="isSimpleMode ? false : isExpired"
-                    :is-low-time="isSimpleMode ? false : isLowTime" :loading="isLoading" />
+                <ThankYouCard :simpleMode="isSimpleMode" :mmss="isSimpleMode ? null : mmss"
+                    :is-expired="isSimpleMode ? false : isExpired" :is-low-time="isSimpleMode ? false : isLowTime"
+                    :loading="isSimpleMode ? false : eventLoading" />
 
                 <SharePanel :qr-url="qrUrl" :public-url="publicUrl" :email-sending="emailSending"
                     :email-sent="emailSent" :email-message="emailMessage" :email-error="emailError" :loading="isLoading"
