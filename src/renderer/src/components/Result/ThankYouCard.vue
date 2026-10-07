@@ -4,7 +4,7 @@ import ResultHeader from '@/components/Result/ResultHeader.vue'
 
 withDefaults(
     defineProps<{
-        mmss?: string
+        mmss?: string | null
         isExpired?: boolean
         isLowTime?: boolean
         loading?: boolean

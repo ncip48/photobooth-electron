@@ -47,8 +47,16 @@ const remaining = ref(300)
 let timerInterval: ReturnType<typeof setInterval> | null = null
 let timerStarted = false
 
+const isSimpleMode = computed(() => {
+    return Boolean(event.value?.is_simple && templateId.value)
+})
+
 const startTimer = () => {
+    // Simple mode tidak menggunakan timer
+    if (isSimpleMode.value) return
+
     stopTimer()
+
     timerInterval = setInterval(() => {
         if (remaining.value > 0) {
             remaining.value--
@@ -70,6 +78,13 @@ watch(
     () => event.value,
     (evt) => {
         if (!evt || timerStarted) return
+
+        // Simple mode: jangan inisialisasi / jalankan timer
+        if (isSimpleMode.value) {
+            stopTimer()
+            return
+        }
+
         totalSeconds.value = evt.time_take_picture ?? 300
         remaining.value = totalSeconds.value
         timerStarted = true
@@ -84,8 +99,19 @@ const mmss = computed(() => {
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 })
 
-const isExpired = computed(() => remaining.value <= 0)
-const isLowTime = computed(() => remaining.value <= 10 && remaining.value > 0)
+const isExpired = computed(() => {
+    // Simple mode tidak pernah expired karena timer
+    if (isSimpleMode.value) return false
+
+    return remaining.value <= 0
+})
+
+const isLowTime = computed(() => {
+    // Simple mode tidak memiliki low-time state
+    if (isSimpleMode.value) return false
+
+    return remaining.value <= 10 && remaining.value > 0
+})
 
 const isSetMaxCapture = computed(() => {
     // Simple event:
@@ -301,8 +327,9 @@ onBeforeUnmount(() => {
 
             <!-- KANAN: Stage + Actions -->
             <section class="order-1 flex min-h-0 flex-col gap-4 lg:order-2">
-                <CaptureStage ref="stageRef" :event="event ?? null" :event-loading="eventLoading" :mmss="mmss"
-                    :is-expired="isExpired" :is-low-time="isLowTime" :countdown="countdown"
+                <CaptureStage ref="stageRef" :event="event ?? null" :event-loading="eventLoading"
+                    :mmss="isSimpleMode ? null : mmss" :is-expired="isSimpleMode ? false : isExpired"
+                    :is-low-time="isSimpleMode ? false : isLowTime" :countdown="countdown"
                     :reviewing-photo="reviewingPhoto" :preview-duration="previewDuration"
                     :preview-remaining="previewRemaining" :total-captures="totalCaptures" @skip-review="skipReview" />
 
@@ -314,9 +341,12 @@ onBeforeUnmount(() => {
 
                 <!-- Actions -->
                 <CaptureActions :capturing="capturing" :is-finishing="isFinishing"
-                    :has-pending-uploads="hasPendingUploads" :total-captures="totalCaptures"
-                    :disabled-capture="isExpired || !!reviewingPhoto || eventLoading || !event || isReachMaxCapture"
-                    :disabled-finish="eventLoading || !event" @capture="takePicture" @finish="finishSession" />
+                    :has-pending-uploads="hasPendingUploads" :total-captures="totalCaptures" :disabled-capture="isExpired ||
+                        !!reviewingPhoto ||
+                        eventLoading ||
+                        !event ||
+                        isReachMaxCapture
+                        " :disabled-finish="eventLoading || !event" @capture="takePicture" @finish="finishSession" />
             </section>
         </main>
     </div>

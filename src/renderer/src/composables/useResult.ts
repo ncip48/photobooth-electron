@@ -1,6 +1,7 @@
 import { computed, ref, type Ref } from 'vue'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/vue-query'
 import { photoboothApi } from '@/lib/api'
+import { PhotoboothEvent } from './useDefaultEvent'
 
 /* =========================================================
    Types
@@ -16,12 +17,7 @@ export interface ResultData {
         id: string
         session_number: string | null
     }
-    event: {
-        id: string
-        title: string
-        subtitle: string | null
-        time_download: number
-    }
+    event: PhotoboothEvent
     photostrip: Photostrip | null
     public_url: string
     qr_url: string

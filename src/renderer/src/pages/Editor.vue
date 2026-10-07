@@ -373,14 +373,14 @@ onBeforeUnmount(() => {
             <section class="order-1 flex min-h-0 flex-col gap-4 lg:order-2">
                 <div class="flex shrink-0 items-center justify-between gap-3">
                     <div class="flex items-center gap-2 border-2 px-3 py-1.5 transition-colors" :class="isExpired
-                            ? 'border-[#b3261e] bg-rose'
-                            : isLowTime
-                                ? 'border-ink bg-amber'
-                                : 'border-ink bg-paper-soft'
+                        ? 'border-[#b3261e] bg-rose'
+                        : isLowTime
+                            ? 'border-ink bg-amber'
+                            : 'border-ink bg-paper-soft'
                         ">
                         <ClockIcon class="h-3.5 w-3.5 shrink-0" :class="isLowTime && !isExpired
-                                ? 'animate-pulse text-ink'
-                                : 'text-ink/60'
+                            ? 'animate-pulse text-ink'
+                            : 'text-ink/60'
                             " />
                         <span class="display text-base font-bold leading-none tracking-tight tabular-nums text-ink">
                             {{ mmss }}
@@ -388,8 +388,8 @@ onBeforeUnmount(() => {
                     </div>
 
                     <div class="flex items-center gap-2 px-3 py-1.5 text-[12.5px]" :class="photoInHand
-                            ? 'border-2 border-blue bg-blue/10 text-ink'
-                            : 'text-ink/55'
+                        ? 'border-2 border-blue bg-blue/10 text-ink'
+                        : 'text-ink/55'
                         ">
                         <template v-if="photoInHand">
                             <span class="display font-bold text-blue">
@@ -426,8 +426,6 @@ onBeforeUnmount(() => {
                 <button type="button"
                     class="display inline-flex w-full shrink-0 items-center justify-center gap-4 border-4 border-ink bg-lime px-8 py-4 text-2xl font-bold text-ink shadow-brutal-xl transition-all duration-150 active:translate-y-2 active:shadow-brutal-sm disabled:cursor-not-allowed disabled:opacity-40 sm:text-3xl"
                     :disabled="!canProceed || finishing || saving" @click="goNext">
-                    <CheckCircleIcon class="h-8 w-8 shrink-0 sm:h-9 sm:w-9"
-                        :class="(finishing || saving) && 'animate-pulse'" />
                     <span class="tracking-[-.02em]">
                         {{ finishing || saving ? 'Menyimpan...' : 'Lanjut' }}
                     </span>

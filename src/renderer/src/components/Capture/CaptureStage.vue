@@ -16,7 +16,7 @@ withDefaults(
     defineProps<{
         event: EventShape | null
         eventLoading?: boolean
-        mmss: string
+        mmss: string | null
         isExpired?: boolean
         isLowTime?: boolean
         countdown?: number
@@ -67,7 +67,8 @@ defineExpose({ cameraRef })
                 </div>
             </div>
 
-            <CaptureTimerPill :mmss="mmss" :is-expired="isExpired" :is-low-time="isLowTime" :loading="eventLoading" />
+            <CaptureTimerPill v-if="!!mmss" :mmss="mmss" :is-expired="isExpired" :is-low-time="isLowTime"
+                :loading="eventLoading" />
         </header>
 
         <!-- Preview area -->

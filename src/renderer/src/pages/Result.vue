@@ -28,6 +28,13 @@ const publicUrl = computed(() => result.value?.public_url ?? '')
 const qrUrl = computed(() => result.value?.qr_url ?? '')
 
 /* =========================================================
+   Simple mode
+   ========================================================= */
+const isSimpleMode = computed(() => {
+    return Boolean(event.value?.is_simple)
+})
+
+/* =========================================================
    Actions
    ========================================================= */
 const {
@@ -43,10 +50,16 @@ const {
 /* =========================================================
    Countdown
    ========================================================= */
-const totalSeconds = computed(() => event.value?.time_download ?? 300)
+const totalSeconds = computed(() => {
+    if (isSimpleMode.value) return 0
+
+    return event.value?.time_download ?? 300
+})
 
 const handleExpired = async () => {
-    // Auto-finish saat timer habis
+    // Simple mode tidak memiliki auto-finish dari timer
+    if (isSimpleMode.value) return
+
     try {
         await finishResult()
         router.push({ name: 'start' })
@@ -57,16 +70,41 @@ const handleExpired = async () => {
 
 const {
     mmss,
-    isExpired,
-    isLowTime,
+    isExpired: countdownExpired,
+    isLowTime: countdownLowTime,
     start: startCountdown,
     stop: stopCountdown,
 } = useResultCountdown(totalSeconds, handleExpired)
 
-/* Mulai countdown saat data siap */
+/*
+ * Expose state yang aman untuk UI.
+ * Simple mode selalu dianggap tidak expired
+ * dan tidak memiliki low-time state.
+ */
+const isExpired = computed(() => {
+    if (isSimpleMode.value) return false
+
+    return countdownExpired.value
+})
+
+const isLowTime = computed(() => {
+    if (isSimpleMode.value) return false
+
+    return countdownLowTime.value
+})
+
+/* =========================================================
+   Mulai countdown saat data siap
+   ========================================================= */
 watch(
     result,
     (val) => {
+        // Simple mode: JANGAN START TIMER
+        if (isSimpleMode.value) {
+            stopCountdown()
+            return
+        }
+
         if (val && totalSeconds.value > 0) {
             startCountdown(totalSeconds.value)
         }
@@ -104,15 +142,17 @@ onBeforeUnmount(() => {
 
 <template>
     <div class="relative flex h-screen w-screen flex-col overflow-hidden bg-paper text-ink">
-        <!-- Main grid -->
         <main
             class="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden p-4 sm:gap-5 sm:p-6 lg:grid-cols-[560px_minmax(0,1fr)] lg:justify-center">
+
             <!-- KIRI: Photostrip -->
             <PhotostripPreview :photostrip="photostrip" :event-title="event?.title" :loading="isLoading" />
 
             <!-- KANAN: Ucapan + Share + Warning + Selesai -->
             <aside class="flex min-h-0 flex-col gap-4">
-                <ThankYouCard :mmss="mmss" :is-expired="isExpired" :is-low-time="isLowTime" :loading="isLoading" />
+
+                <ThankYouCard :mmss="isSimpleMode ? null : mmss" :is-expired="isSimpleMode ? false : isExpired"
+                    :is-low-time="isSimpleMode ? false : isLowTime" :loading="isLoading" />
 
                 <SharePanel :qr-url="qrUrl" :public-url="publicUrl" :email-sending="emailSending"
                     :email-sent="emailSent" :email-message="emailMessage" :email-error="emailError" :loading="isLoading"
