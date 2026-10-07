@@ -73,13 +73,6 @@ const scanSteps = [
                             <p class="mt-4 text-center text-[12.5px] leading-5 text-ink/70">
                                 Scan QR untuk membuka galeri foto Anda.
                             </p>
-
-                            <button type="button" @click="copyPublicUrl"
-                                class="display mt-4 flex w-full items-center justify-center gap-2 border-2 border-ink bg-lime px-4 py-2.5 text-[12px] font-bold transition-transform hover:-translate-y-0.5 active:translate-y-0">
-                                <CheckCircleIcon v-if="copied" class="h-4 w-4" />
-                                <ClipboardDocumentIcon v-else class="h-4 w-4" />
-                                {{ copied ? 'Link tersalin!' : 'Salin link' }}
-                            </button>
                         </div>
                     </template>
                 </div>
