@@ -12,6 +12,7 @@ import { useActiveEvent } from '@/composables/useEvents'
 const route = useRoute()
 const router = useRouter()
 const sessionId = computed(() => route.params.sessionId as string)
+const templateId = computed(() => route.params.templateId as string)
 
 /* Event */
 const { data: event, isLoading: eventLoading } = useActiveEvent()
@@ -33,7 +34,10 @@ const {
     finishCapture,
     deletingId,
     isFinishing,
-} = useCaptures(sessionId)
+
+    totalDropzone,
+    isTemplateLoading,
+} = useCaptures(sessionId, templateId)
 
 /* =========================================================
    Session timer
@@ -82,6 +86,10 @@ const mmss = computed(() => {
 
 const isExpired = computed(() => remaining.value <= 0)
 const isLowTime = computed(() => remaining.value <= 10 && remaining.value > 0)
+
+//TODO: set dari default event juga
+const isSetMaxCapture = computed(() => (templateId && totalDropzone.value > 0) || (event?.value?.max_capture && event?.value?.max_capture > 0))
+const isReachMaxCapture = computed(() => isSetMaxCapture && totalCaptures.value === totalDropzone.value)
 
 /* =========================================================
    Capture state
@@ -258,7 +266,8 @@ onBeforeUnmount(() => {
             <!-- KIRI: Gallery -->
             <aside class="order-2 flex min-h-0 flex-col lg:order-1">
                 <CaptureGallery :gallery="gallery" :total-captures="totalCaptures" :gallery-loading="galleryLoading"
-                    :deleting-id="deletingId" :delete-error="deleteError" @delete="deletePhoto" />
+                    :deleting-id="deletingId" :delete-error="deleteError" @delete="deletePhoto"
+                    :max-capture="totalDropzone" />
             </aside>
 
             <!-- KANAN: Stage + Actions -->
@@ -277,7 +286,7 @@ onBeforeUnmount(() => {
                 <!-- Actions -->
                 <CaptureActions :capturing="capturing" :is-finishing="isFinishing"
                     :has-pending-uploads="hasPendingUploads" :total-captures="totalCaptures"
-                    :disabled-capture="isExpired || !!reviewingPhoto || eventLoading || !event"
+                    :disabled-capture="isExpired || !!reviewingPhoto || eventLoading || !event || isReachMaxCapture"
                     :disabled-finish="eventLoading || !event" @capture="takePicture" @finish="finishSession" />
             </section>
         </main>

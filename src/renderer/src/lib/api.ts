@@ -129,6 +129,11 @@ export const photoboothApi = {
         return data
     },
 
+    async getTemplate(sessionId: string, templateId: string) {
+        const { data } = await api.get(`/photobooth/capture/${sessionId}/template/${templateId}`)
+        return data
+    },
+
     /* ============ Result ============ */
     async getResult(sessionId: string) {
         const { data } = await api.get(`/photobooth/result/${sessionId}`)

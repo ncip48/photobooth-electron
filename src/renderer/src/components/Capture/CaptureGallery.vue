@@ -14,11 +14,13 @@ withDefaults(
         galleryLoading?: boolean
         deletingId?: string | null
         deleteError?: string
+        maxCapture?: number
     }>(),
     {
         galleryLoading: false,
         deletingId: null,
         deleteError: '',
+        maxCapture: 0,
     }
 )
 
@@ -42,7 +44,12 @@ const emit = defineEmits<{
                             <span class="inline-block h-3 w-16 animate-pulse bg-ink/10" />
                         </template>
                         <template v-else>
-                            {{ totalCaptures }} foto
+                            <template v-if="maxCapture > 0">
+                                {{ totalCaptures }}/{{ maxCapture }} foto
+                            </template>
+                            <template v-else>
+                                {{ totalCaptures }} foto
+                            </template>
                         </template>
                     </p>
                 </div>

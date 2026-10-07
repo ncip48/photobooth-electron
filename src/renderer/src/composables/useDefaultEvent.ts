@@ -13,6 +13,7 @@ export interface PhotoboothEvent {
     is_paid_event: boolean
     is_simple: boolean
     background_url?: string | null
+    max_capture?: number
     [key: string]: any
 }
 
