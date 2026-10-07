@@ -1,21 +1,47 @@
-import { ref, onBeforeUnmount } from 'vue'
-import { electron } from '@/lib/electron'
+import { ref, computed, watch } from 'vue'
+import { getElectron } from '@/lib/electron'
 
-interface CameraInfo {
+export interface CameraInfo {
     model: string
     port?: string
+    /** Device ID / unique identifier */
+    id?: string
 }
 
 export function useCamera() {
-    const detecting = ref(false)
-    const connecting = ref(false)
     const connected = ref(false)
+    const connecting = ref(false)
+    const detecting = ref(false)
     const connectedModel = ref<string | null>(null)
     const cameras = ref<CameraInfo[]>([])
     const livePreviewUrl = ref<string | null>(null)
     const error = ref('')
 
-    let previewTimer: ReturnType<typeof setInterval> | null = null
+    let previewInterval: ReturnType<typeof setInterval> | null = null
+
+    /* =========================================================
+       Persistence — selected camera
+       ========================================================= */
+    const STORAGE_KEY = 'photobooth.selectedCamera'
+
+    function loadSelectedCameraId(): string | null {
+        try {
+            return localStorage.getItem(STORAGE_KEY)
+        } catch {
+            return null
+        }
+    }
+
+    function saveSelectedCameraId(id: string | null) {
+        try {
+            if (id) localStorage.setItem(STORAGE_KEY, id)
+            else localStorage.removeItem(STORAGE_KEY)
+        } catch {
+            // ignore
+        }
+    }
+
+    const selectedCameraId = ref<string | null>(loadSelectedCameraId())
 
     /* =========================================================
        Detect cameras
@@ -25,44 +51,90 @@ export function useCamera() {
         error.value = ''
 
         try {
+            const electron = getElectron()
             const res = await electron.camera.list()
+
             if (res.success) {
-                cameras.value = res.cameras ?? []
+                cameras.value = (res.cameras ?? []).map((c: any) => ({
+                    model: c.model,
+                    port: c.port,
+                    id: c.id ?? c.port ?? c.model, // fallback ID
+                }))
             } else {
                 error.value = res.error ?? 'Gagal mendeteksi kamera.'
                 cameras.value = []
             }
+
+            return cameras.value
         } catch (err: any) {
             error.value = err?.message ?? 'Failed to detect cameras.'
+            cameras.value = []
+            return []
         } finally {
             detecting.value = false
         }
     }
 
     /* =========================================================
-       Connect camera
+       Connect to a specific camera
        ========================================================= */
     async function connect(index = 0) {
         connecting.value = true
         error.value = ''
 
         try {
+            const electron = getElectron()
             const res = await electron.camera.connect(index)
 
             if (res.success) {
                 connected.value = true
                 connectedModel.value = res.model ?? null
-                await startPreview()
+
+                // Save selected camera ID
+                const cam = cameras.value[index]
+                if (cam?.id) {
+                    selectedCameraId.value = cam.id
+                    saveSelectedCameraId(cam.id)
+                }
+
+                return res
             } else {
                 error.value = res.error ?? 'Gagal terhubung ke kamera.'
                 connected.value = false
+                return null
             }
         } catch (err: any) {
             error.value = err?.message ?? 'Failed to connect camera.'
             connected.value = false
+            return null
         } finally {
             connecting.value = false
         }
+    }
+
+    /* =========================================================
+       Connect by camera ID (untuk auto-connect)
+       ========================================================= */
+    async function connectById(cameraId: string) {
+        const idx = cameras.value.findIndex((c) => c.id === cameraId)
+        if (idx < 0) {
+            error.value = `Camera ${cameraId} tidak ditemukan.`
+            return null
+        }
+        return connect(idx)
+    }
+
+    /* =========================================================
+       Auto-connect on mount (jika ada camera di localStorage)
+       ========================================================= */
+    async function autoConnect() {
+        const savedId = loadSelectedCameraId()
+        if (!savedId) return null
+
+        const list = await detect()
+        if (list.length === 0) return null
+
+        return connectById(savedId)
     }
 
     /* =========================================================
@@ -70,40 +142,45 @@ export function useCamera() {
        ========================================================= */
     async function disconnect() {
         stopPreview()
+
         try {
+            const electron = getElectron()
             await electron.camera.disconnect()
         } catch {
             // ignore
         }
+
         connected.value = false
         connectedModel.value = null
         livePreviewUrl.value = null
     }
 
     /* =========================================================
-       Live preview loop
+       Preview loop
        ========================================================= */
     function startPreview() {
-        stopPreview()
-        // Initial preview
-        refreshPreview()
-        // Loop tiap 500ms (~2 FPS)
-        previewTimer = setInterval(refreshPreview, 500)
+        if (previewInterval) return
+        previewInterval = setInterval(refreshPreview, 500)
     }
 
     function stopPreview() {
-        if (previewTimer) {
-            clearInterval(previewTimer)
-            previewTimer = null
+        if (previewInterval) {
+            clearInterval(previewInterval)
+            previewInterval = null
+        }
+        if (livePreviewUrl.value) {
+            URL.revokeObjectURL(livePreviewUrl.value)
+            livePreviewUrl.value = null
         }
     }
 
     let refreshing = false
     async function refreshPreview() {
-        if (refreshing) return // prevent overlap
+        if (refreshing || !connected.value) return
         refreshing = true
 
         try {
+            const electron = getElectron()
             const res = await electron.camera.preview()
             if (res.success && res.data) {
                 livePreviewUrl.value = res.data
@@ -119,12 +196,14 @@ export function useCamera() {
        Capture
        ========================================================= */
     async function capture() {
+        const electron = getElectron()
         const res = await electron.camera.capture()
         if (!res.success) throw new Error(res.error ?? 'Capture failed.')
         return res
     }
 
     async function captureToFile(sessionId: string) {
+        const electron = getElectron()
         const res = await electron.camera.captureToFile(sessionId)
         if (!res.success) throw new Error(res.error ?? 'Capture failed.')
         return res
@@ -134,37 +213,43 @@ export function useCamera() {
        Config
        ========================================================= */
     async function getConfig() {
+        const electron = getElectron()
         const res = await electron.camera.getConfig()
-        if (!res.success) throw new Error(res.error)
+        if (!res.success) throw new Error(res.error ?? 'Failed to get config.')
         return res.config
     }
 
     async function setConfigValue(name: string, value: string | number) {
+        const electron = getElectron()
         const res = await electron.camera.setConfig(name, value)
-        if (!res.success) throw new Error(res.error)
+        if (!res.success) throw new Error(res.error ?? 'Failed to set config.')
         return true
     }
 
     /* =========================================================
-       Cleanup
+       Reset selected camera (forget)
        ========================================================= */
-    onBeforeUnmount(() => {
-        stopPreview()
-    })
+    function forgetSelectedCamera() {
+        saveSelectedCameraId(null)
+        selectedCameraId.value = null
+    }
 
     return {
         // State
-        detecting,
-        connecting,
         connected,
+        connecting,
+        detecting,
         connectedModel,
         cameras,
         livePreviewUrl,
         error,
+        selectedCameraId,
 
         // Actions
         detect,
         connect,
+        connectById,
+        autoConnect,
         disconnect,
         capture,
         captureToFile,
@@ -172,5 +257,6 @@ export function useCamera() {
         setConfigValue,
         startPreview,
         stopPreview,
+        forgetSelectedCamera,
     }
 }

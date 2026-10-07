@@ -18,26 +18,26 @@ const router = createRouter({
             name: 'event-picker',
             component: () => import('@/pages/EventPicker.vue'),
         },
-        // {
-        //     path: '/payment',
-        //     name: 'payment',
-        //     component: () => import('@/pages/Payment.vue'),
-        // },
-        // {
-        //     path: '/capture',
-        //     name: 'capture',
-        //     component: () => import('@/pages/Capture.vue'),
-        // },
-        // {
-        //     path: '/editor',
-        //     name: 'editor',
-        //     component: () => import('@/pages/Editor.vue'),
-        // },
-        // {
-        //     path: '/result',
-        //     name: 'result',
-        //     component: () => import('@/pages/Result.vue'),
-        // },
+        {
+            path: '/payment',
+            name: 'payment',
+            component: () => import('@/pages/Payment.vue'),
+        },
+        {
+            path: '/capture/:sessionId',
+            name: 'capture',
+            component: () => import('@/pages/Capture.vue'),
+        },
+        {
+            path: '/editor/:sessionId',
+            name: 'editor',
+            component: () => import('@/pages/Editor.vue'),
+        },
+        {
+            path: '/result/:sessionId',
+            name: 'result',
+            component: () => import('@/pages/Result.vue'),
+        },
     ],
 })
 

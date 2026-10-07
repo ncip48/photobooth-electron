@@ -101,6 +101,14 @@ export const photoboothApi = {
     },
 
     /* ============ Capture ============ */
+
+    async listCaptures(sessionId: string) {
+        const { data } = await api.get(
+            `/photobooth/capture/${sessionId}/list`
+        )
+        return data
+    },
+
     async uploadCapture(sessionId: string, image: string, mimeType = 'image/jpeg') {
         const { data } = await api.post(`/photobooth/capture/${sessionId}/upload`, {
             image,
@@ -136,6 +144,31 @@ export const photoboothApi = {
 
     async finishResult(sessionId: string) {
         const { data } = await api.post(`/photobooth/result/${sessionId}/finish`)
+        return data
+    },
+
+    /* ============ Editor ============ */
+    async getSessionPhotos(sessionId: string) {
+        const { data } = await api.get(`/photobooth/editor/${sessionId}/photos`)
+        return data
+    },
+
+    async getTemplates(sessionId: string) {
+        const { data } = await api.get(`/photobooth/editor/${sessionId}/templates`)
+        return data
+    },
+
+    async saveDesign(sessionId: string, formData: FormData) {
+        const { data } = await api.post(
+            `/photobooth/editor/${sessionId}/save`,
+            formData,
+            { headers: { 'Content-Type': 'multipart/form-data' } }
+        )
+        return data
+    },
+
+    async finishEditor(sessionId: string) {
+        const { data } = await api.post(`/photobooth/editor/${sessionId}/finish`)
         return data
     },
 }

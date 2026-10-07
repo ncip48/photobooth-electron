@@ -5,7 +5,6 @@ import {
     PlayIcon,
     ArrowsRightLeftIcon,
     Cog6ToothIcon,
-    MapPinIcon,
     SparklesIcon,
 } from '@heroicons/vue/24/outline'
 import SettingsModal from '@/components/Start/SettingsModal.vue'
@@ -19,10 +18,9 @@ import {
 const router = useRouter()
 
 /* =========================================================
-   Data — via TanStack Query
+   Data
    ========================================================= */
 const { data: activeEvent, isLoading, isError } = useActiveEvent()
-const { data: events } = useEvents()
 const availableEventCount = useAvailableEventCount()
 const startMutation = useStartSession()
 
@@ -31,18 +29,24 @@ const starting = computed(() => startMutation.isPending.value)
 const startSession = () => {
     if (!activeEvent.value?.id || starting.value) return
 
-    startMutation.mutate(activeEvent.value.id, {
-        onSuccess: (data) => {
-            const sessionId = data?.session_id ?? data?.id
-            router.push({
-                name: 'payment',
-                params: { sessionId: sessionId ? String(sessionId) : undefined },
-            })
-        },
-        onError: (err) => {
-            console.error('Failed to start session:', err)
-        },
-    })
+    if (activeEvent.value?.is_paid_event) {
+        startMutation.mutate(activeEvent.value.id, {
+            onSuccess: (data) => {
+                router.push({
+                    name: 'payment',
+                })
+            },
+            onError: (err) => {
+                console.error('Failed to start session:', err)
+            },
+        })
+    } else {
+        const sessionId = '01a0179e-a690-7141-8c3b-4aecc12936cb'
+        router.push({
+            name: 'capture',
+            params: { sessionId: sessionId ? String(sessionId) : undefined },
+        })
+    }
 }
 
 /* =========================================================
@@ -77,7 +81,7 @@ const dateLabel = computed(() =>
 )
 
 /* =========================================================
-   Settings modal
+   Settings
    ========================================================= */
 const showSettings = ref(false)
 
@@ -88,20 +92,13 @@ const goToEventPicker = () => {
 
 const goToDashboard = () => {
     showSettings.value = false
-    // Electron: bisa buka window baru ke dashboard web, atau route internal
-    // router.push({ name: 'dashboard' })
-    if (window.electron) {
-        // optional: open dashboard URL di browser default
-        // window.open('http://localhost:8000/dashboard', '_blank')
-    }
 }
 
 /* =========================================================
-   Keyboard — Space / Enter = start
+   Keyboard
    ========================================================= */
 const onKeydown = (e: KeyboardEvent) => {
     if (showSettings.value) return
-
     if (e.code === 'Space' || e.code === 'Enter') {
         e.preventDefault()
         startSession()
@@ -110,53 +107,85 @@ const onKeydown = (e: KeyboardEvent) => {
 
 onMounted(() => {
     window.addEventListener('keydown', onKeydown)
+    document.addEventListener('contextmenu', (e) => e.preventDefault())
 })
 
 onBeforeUnmount(() => {
     window.removeEventListener('keydown', onKeydown)
-})
-
-/* Prevent right-click */
-onMounted(() => {
-    document.addEventListener('contextmenu', (e) => e.preventDefault())
 })
 </script>
 
 <template>
     <div class="relative flex h-screen w-screen flex-col overflow-hidden bg-ink text-white select-none"
         @contextmenu.prevent>
-        <!-- ============ BACKGROUND ============ -->
-        <div class="absolute inset-0 z-0">
+        <!-- ============================================================
+             AMBIENT BACKGROUND
+             Multi-layer: image + ambient blobs + gradient + grain + vignette
+             ============================================================ -->
+        <div class="absolute inset-0 z-0 overflow-hidden">
+            <!-- Base image / pattern -->
             <img v-if="activeEvent?.background_url" :src="activeEvent.background_url" :alt="activeEvent.title"
-                class="h-full w-full object-cover" />
+                class="h-full w-full scale-110 object-cover" />
             <div v-else class="grid-pattern h-full w-full bg-ink" />
 
-            <div class="absolute inset-0 backdrop-blur-[2px]" style="
+            <!-- Ambient color blobs (floating) -->
+            <div class="ambient-float-slow pointer-events-none absolute -left-[20%] -top-[20%] h-[70vh] w-[70vh] rounded-full bg-lime/20 blur-[120px]"
+                aria-hidden="true" />
+            <div class="ambient-float-mid pointer-events-none absolute -right-[15%] top-[10%] h-[60vh] w-[60vh] rounded-full bg-blue/25 blur-[140px]"
+                aria-hidden="true" />
+            <div class="ambient-float-fast pointer-events-none absolute bottom-[-15%] left-[20%] h-[50vh] w-[50vh] rounded-full bg-lime/15 blur-[100px]"
+                aria-hidden="true" />
+
+            <!-- Cinematic vignette + darkening -->
+            <div class="absolute inset-0 backdrop-blur-[3px]" style="
                     background: radial-gradient(
                         ellipse at center,
-                        rgba(32, 32, 30, 0.3) 0%,
-                        rgba(32, 32, 30, 0.7) 55%,
-                        rgba(32, 32, 30, 0.95) 100%
+                        rgba(32, 32, 30, 0.35) 0%,
+                        rgba(32, 32, 30, 0.75) 55%,
+                        rgba(32, 32, 30, 0.98) 100%
                     );
                 " aria-hidden="true" />
 
-            <div class="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-ink/85 to-transparent" aria-hidden="true" />
-            <div class="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-ink/90 to-transparent"
+            <!-- Top gradient (readability topbar) -->
+            <div class="absolute inset-x-0 top-0 h-56 bg-gradient-to-b from-ink/90 via-ink/40 to-transparent"
                 aria-hidden="true" />
 
-            <div class="absolute inset-0 opacity-[0.03] mix-blend-overlay" style="
+            <!-- Bottom gradient (readability footer) -->
+            <div class="absolute inset-x-0 bottom-0 h-56 bg-gradient-to-t from-ink via-ink/60 to-transparent"
+                aria-hidden="true" />
+
+            <!-- Film grain texture -->
+            <div class="grain-overlay pointer-events-none absolute -inset-[5%] opacity-[0.05] mix-blend-overlay" style="
                     background-image: radial-gradient(
-                        rgba(255, 255, 255, 0.5) 1px,
+                        rgba(255, 255, 255, 0.6) 1px,
                         transparent 1px
                     );
                     background-size: 3px 3px;
                 " aria-hidden="true" />
         </div>
 
-        <!-- ============ TOP BAR ============ -->
-        <header class="relative flex items-center justify-between gap-4 px-6 py-5 lg:px-10">
+        <!-- ============================================================
+             ORNAMENTAL CORNERS (brutalist marks)
+             ============================================================ -->
+        <!-- <div class="pointer-events-none absolute inset-6 z-10 hidden lg:block" aria-hidden="true">
+            
+            <div class="absolute left-0 top-0 h-6 w-6 border-l-2 border-t-2 border-lime/40" />
+            
+            <div class="absolute right-0 top-0 h-6 w-6 border-r-2 border-t-2 border-lime/40" />
+            
+            <div class="absolute bottom-0 left-0 h-6 w-6 border-b-2 border-l-2 border-lime/40" />
+            
+            <div class="absolute bottom-0 right-0 h-6 w-6 border-b-2 border-r-2 border-lime/40" />
+        </div> -->
+
+        <!-- ============================================================
+             TOP BAR
+             ============================================================ -->
+        <header class="slide-in-down relative z-20 flex items-center justify-between gap-4 px-6 py-5 lg:px-10">
+            <!-- Clock -->
             <div class="flex items-baseline gap-4">
-                <p class="display text-3xl font-bold leading-none tracking-tight text-white sm:text-4xl">
+                <p
+                    class="display text-3xl font-bold leading-none tracking-[-.02em] text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.5)] sm:text-4xl">
                     {{ timeLabel }}
                 </p>
                 <p class="hidden text-[12.5px] text-white/60 sm:block">
@@ -164,33 +193,36 @@ onMounted(() => {
                 </p>
             </div>
 
+            <!-- Actions -->
             <div class="flex items-center gap-3">
                 <button type="button"
-                    class="inline-flex items-center gap-2.5 border-2 border-white/25 bg-ink/60 px-4 py-3 text-[13px] font-bold text-white backdrop-blur-md transition-all active:scale-95 hover:border-lime hover:bg-lime hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                    class="group inline-flex items-center gap-2.5 border-2 border-white/25 bg-ink/60 px-4 py-3 text-[13px] font-bold text-white backdrop-blur-md transition-all active:scale-95 hover:border-lime hover:bg-lime hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
                     :disabled="availableEventCount === 0" @click="goToEventPicker">
-                    <ArrowsRightLeftIcon class="h-4 w-4" />
+                    <ArrowsRightLeftIcon class="h-4 w-4 transition-transform group-hover:rotate-180" />
                 </button>
 
                 <button type="button"
-                    class="grid h-12 w-12 shrink-0 place-items-center border-2 border-white/25 bg-ink/60 text-white backdrop-blur-md transition-all active:scale-95 hover:border-lime hover:bg-lime hover:text-ink"
+                    class="group grid h-12 w-12 shrink-0 place-items-center border-2 border-white/25 bg-ink/60 text-white backdrop-blur-md transition-all active:scale-95 hover:border-lime hover:bg-lime hover:text-ink"
                     aria-label="Pengaturan" @click="showSettings = true">
-                    <Cog6ToothIcon class="h-5 w-5" />
+                    <Cog6ToothIcon class="h-5 w-5 transition-transform group-hover:rotate-90" />
                 </button>
             </div>
         </header>
 
-        <!-- ============ MAIN ============ -->
-        <main class="relative flex flex-1 flex-col items-center justify-center px-6 py-6 lg:px-10">
-            <!-- Loading state -->
-            <div v-if="isLoading" class="mx-auto flex flex-col items-center gap-4 text-center">
+        <!-- ============================================================
+             MAIN
+             ============================================================ -->
+        <main class="relative z-20 flex flex-1 flex-col items-center justify-center px-6 py-6 lg:px-10">
+            <!-- Loading -->
+            <div v-if="isLoading" class="fade-in mx-auto flex flex-col items-center gap-4 text-center">
                 <div class="h-12 w-12 animate-spin border-4 border-lime/30 border-t-lime" />
                 <p class="display text-lg font-bold text-white/80">
                     Memuat event...
                 </p>
             </div>
 
-            <!-- Error state -->
-            <div v-else-if="isError" class="mx-auto flex max-w-xl flex-col items-center gap-5 text-center">
+            <!-- Error -->
+            <div v-else-if="isError" class="fade-in mx-auto flex max-w-xl flex-col items-center gap-5 text-center">
                 <div class="grid h-20 w-20 place-items-center border-2 border-rose bg-rose/20">
                     <SparklesIcon class="h-10 w-10 text-rose" />
                 </div>
@@ -211,7 +243,7 @@ onMounted(() => {
             </div>
 
             <!-- No event -->
-            <div v-else-if="!activeEvent" class="mx-auto flex max-w-xl flex-col items-center gap-7 text-center">
+            <div v-else-if="!activeEvent" class="fade-in mx-auto flex max-w-xl flex-col items-center gap-7 text-center">
                 <div class="grid h-24 w-24 place-items-center border-2 border-lime bg-lime/15 backdrop-blur-sm">
                     <SparklesIcon class="h-12 w-12 text-lime" />
                 </div>
@@ -235,40 +267,81 @@ onMounted(() => {
                 </button>
             </div>
 
-            <!-- Active event -->
-            <div v-else class="flex w-full max-w-4xl flex-col items-center text-center">
+            <!-- ==================================================
+                 ACTIVE EVENT — the money shot
+                 ================================================== -->
+            <div v-else class="flex w-full max-w-5xl flex-col items-center text-center">
+                <!-- Eyebrow / label -->
+                <div
+                    class="slide-in-down eyebrow mb-8 inline-flex items-center gap-3 border border-lime/40 bg-ink/50 px-4 py-2 backdrop-blur-md">
+                    <span class="relative flex h-2 w-2 items-center justify-center">
+                        <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-lime opacity-75" />
+                        <span class="relative inline-flex h-2 w-2 rounded-full bg-lime" />
+                    </span>
+                    <span class="text-lime">Sesi Photobooth Siap</span>
+                </div>
+
+                <!-- Title -->
                 <h1
-                    class="display text-5xl font-bold leading-[1.05] tracking-[-.03em] text-white drop-shadow-[0_4px_20px_rgba(0,0,0,0.5)] sm:text-6xl lg:text-7xl xl:text-8xl">
+                    class="slide-in-up display text-5xl font-bold leading-[1] tracking-[-.045em] text-white drop-shadow-[0_8px_30px_rgba(0,0,0,0.7)] sm:text-6xl lg:text-7xl xl:text-[7.5rem]">
                     {{ activeEvent.title }}
                 </h1>
 
+                <!-- Decorative divider -->
+                <div class="slide-in-up delay-200 mt-8 flex items-center gap-3" aria-hidden="true">
+                    <span class="h-px w-12 bg-lime/60 sm:w-20" />
+                    <span class="h-1.5 w-1.5 rotate-45 bg-lime" />
+                    <span class="h-px w-12 bg-lime/60 sm:w-20" />
+                </div>
+
+                <!-- Subtitle -->
                 <p v-if="activeEvent.subtitle"
-                    class="mt-6 max-w-3xl text-lg leading-8 text-white/85 drop-shadow-[0_2px_10px_rgba(0,0,0,0.4)] sm:text-xl sm:leading-9">
+                    class="slide-in-up delay-300 mt-8 max-w-3xl text-xl leading-9 text-white/80 drop-shadow-[0_2px_10px_rgba(0,0,0,0.5)] sm:text-2xl sm:leading-10">
                     {{ activeEvent.subtitle }}
                 </p>
 
-                <!-- <div v-if="activeEvent.location"
-                    class="mt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[14px] text-white/70">
-                    <span class="inline-flex items-center gap-2">
-                        <MapPinIcon class="h-4 w-4 text-lime" />
-                        {{ activeEvent.location }}
-                    </span>
-                </div> -->
+                <!-- ==================================================
+                     MULAI button — hero
+                     ================================================== -->
+                <div class="slide-in-up delay-500 relative mt-20">
+                    <!-- Glow behind button -->
+                    <div class="pointer-events-none absolute -inset-8 rounded-full bg-lime/20 blur-3xl"
+                        aria-hidden="true" />
 
-                <button type="button"
-                    class="group relative mt-14 inline-flex items-center justify-center gap-5 border-4 border-ink bg-lime px-16 py-7 text-3xl font-bold text-ink shadow-brutal-xl transition-all duration-150 active:translate-y-2 active:shadow-brutal-sm disabled:cursor-wait disabled:opacity-70 sm:px-24 sm:py-8 sm:text-4xl lg:px-28 lg:py-9 lg:text-5xl"
-                    :disabled="starting" @click="startSession">
-                    <PlayIcon
-                        class="h-10 w-10 shrink-0 transition-transform group-active:scale-95 sm:h-12 sm:w-12 lg:h-14 lg:w-14"
-                        :class="starting && 'animate-pulse'" />
-                    <span class="display tracking-[-.02em]">
-                        {{ starting ? 'Memulai...' : 'MULAI' }}
-                    </span>
-                </button>
+                    <!-- Secondary ring (breathing) -->
+                    <div class="breath pointer-events-none absolute -inset-3 border-2 border-lime/30"
+                        aria-hidden="true" />
+
+                    <!-- Button -->
+                    <button type="button"
+                        class="group glow-pulse relative inline-flex items-center justify-center gap-5 border-4 border-ink bg-lime px-20 py-8 text-3xl font-bold text-ink transition-all duration-200 active:translate-y-1 active:shadow-brutal-sm disabled:cursor-wait disabled:opacity-70 sm:px-28 sm:py-9 sm:text-4xl lg:px-32 lg:py-10 lg:text-5xl"
+                        :disabled="starting" @click="startSession">
+                        <PlayIcon
+                            class="h-10 w-10 shrink-0 transition-transform duration-300 group-hover:scale-110 group-active:scale-95 sm:h-12 sm:w-12 lg:h-14 lg:w-14"
+                            :class="starting && 'animate-pulse'" />
+                        <span class="display tracking-[-.03em]">
+                            {{ starting ? 'Memulai...' : 'MULAI' }}
+                        </span>
+
+                        <!-- Shine sweep on hover -->
+                        <span class="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+                            <span
+                                class="marquee-accent absolute inset-y-0 w-1/3 -skew-x-12 bg-gradient-to-r from-transparent via-white/30 to-transparent"
+                                style="animation-play-state: paused" />
+                        </span>
+                    </button>
+                </div>
             </div>
         </main>
 
-        <!-- ============ SETTINGS MODAL ============ -->
+        <!-- ============================================================
+             BOTTOM — subtle brand / footer
+             ============================================================ -->
+        <footer class="fade-in delay-900 relative z-20 flex items-center justify-center px-6 py-4 lg:px-10">
+
+        </footer>
+
+        <!-- Settings Modal -->
         <SettingsModal :show="showSettings" :active-event="activeEvent ?? null" @close="showSettings = false"
             @go-to-dashboard="goToDashboard" @go-to-event-picker="goToEventPicker" />
     </div>

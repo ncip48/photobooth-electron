@@ -41,7 +41,7 @@ export function useStartSession() {
     return useMutation({
         mutationFn: (eventId: string) => photoboothApi.startSession(eventId),
         onSuccess: (data) => {
-            // Simpan draft_id supaya bisa dipakai di halaman payment
+            // Simpan draft_id untuk payment
             if (data?.draft_id) {
                 sessionStorage.setItem('photobooth.draft_id', data.draft_id)
             }

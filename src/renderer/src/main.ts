@@ -5,6 +5,7 @@ import App from './App.vue'
 import router from './router/index.js'
 import { queryClient } from './lib/queryClient.js'
 import './styles/app.css'
+import './styles/start-ambient.css'
 
 const app = createApp(App)
 

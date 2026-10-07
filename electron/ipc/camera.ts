@@ -8,13 +8,16 @@ export function registerCameraHandlers(ipcMain: IpcMain): void {
     ipcMain.handle('camera:list', async () => {
         try {
             const cameras = await cameraService.list()
-            return { success: true, cameras }
-        } catch (err: any) {
             return {
-                success: false,
-                error: err?.message ?? 'Failed to list cameras.',
-                cameras: [],
+                success: true,
+                cameras: cameras.map((c: any) => ({
+                    model: c.model,
+                    port: c.port,
+                    id: c.port ?? c.model, // unique identifier
+                })),
             }
+        } catch (err: any) {
+            return { success: false, error: err?.message, cameras: [] }
         }
     })
 

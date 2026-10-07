@@ -177,7 +177,7 @@ const resetGeneral = () => {
 const generalProcessing = computed(() => generalMutation.isPending.value)
 
 /* =========================================================
-   ============ TAB: CAMERA ============
+   ============ CAMERA ============
    ========================================================= */
 const {
     detecting,
@@ -189,78 +189,201 @@ const {
     error: cameraError,
     detect,
     connect,
+    connectById,
+    autoConnect,
     disconnect,
     capture: capturePhoto,
     getConfig: getCameraConfig,
     setConfigValue,
     startPreview,
     stopPreview,
+    selectedCameraId,
 } = useCamera()
 
-/* --- Camera form (nama + preference) --- */
-const cameraForm = ref({
-    camera_name: props.cameraSettings?.camera_name ?? '',
-    camera_device_id: props.cameraSettings?.camera_device_id ?? '',
-    iso: props.cameraSettings?.iso ?? '',
-    aperture: props.cameraSettings?.aperture ?? '',
-    shutter_speed: props.cameraSettings?.shutter_speed ?? '',
-})
-
-watch(
-    () => props.cameraSettings,
-    (cs) => {
-        if (!cs) return
-        cameraForm.value.camera_name = cs.camera_name ?? ''
-        cameraForm.value.camera_device_id = cs.camera_device_id ?? ''
-        cameraForm.value.iso = cs.iso ?? ''
-        cameraForm.value.aperture = cs.aperture ?? ''
-        cameraForm.value.shutter_speed = cs.shutter_speed ?? ''
-    },
-    { deep: true }
-)
-
-/* --- Camera config tree (untuk choices) --- */
+/* =========================================================
+   Camera config tree
+   ========================================================= */
 const cameraConfig = ref<any>(null)
-const supportedKeys = computed(() =>
-    Object.keys(cameraConfig.value ?? {})
+
+/* =========================================================
+   Auto-detect + auto-connect saat modal dibuka ke tab camera
+   ========================================================= */
+watch(
+    () => [props.show, activeTab.value],
+    async ([show, tab]) => {
+        if (!show || tab !== 'camera') return
+
+        // 1. Detect cameras
+        await detect()
+
+        // 2. Auto-connect ke camera terakhir (kalau ada di localStorage)
+        if (!connected.value && cameras.value.length > 0) {
+            const savedId = selectedCameraId.value
+            if (savedId) {
+                await connectById(savedId)
+            } else if (cameras.value.length > 0) {
+                // Kalau belum ada, connect ke yang pertama
+                await connect(0)
+            }
+        }
+
+        // 3. Load config tree kalau connected
+        if (connected.value) {
+            try {
+                cameraConfig.value = await getCameraConfig()
+            } catch (err) {
+                console.error('Failed to load camera config:', err)
+            }
+        }
+
+        // 4. Start preview
+        if (connected.value) {
+            startPreview()
+        }
+    },
+    { immediate: false }
 )
 
-/* --- Test capture --- */
-const testStatus = ref<'idle' | 'capturing' | 'success' | 'error'>('idle')
-const testImageUrl = ref<string | null>(null)
-
-/* --- Connect handler --- */
-const handleConnect = async () => {
-    // 1. Detect dulu
-    await detect()
-
-    if (cameras.value.length === 0) {
-        console.warn("Tidak ada kamera terdeteksi")
-        return
+/* =========================================================
+   Handle camera dropdown change
+   ========================================================= */
+const handleCameraChange = async (cameraId: string) => {
+    // Disconnect dulu kalau ada yang connected
+    if (connected.value) {
+        await disconnect()
+        cameraConfig.value = null
     }
 
-    // 2. Connect ke camera pertama
-    await connect(0)
+    // Connect ke camera baru
+    await connectById(cameraId)
 
-    // 3. Load config tree
+    // Load config tree
     if (connected.value) {
         try {
             cameraConfig.value = await getCameraConfig()
+            startPreview()
         } catch (err) {
             console.error('Failed to load camera config:', err)
         }
     }
 }
 
-/* --- Disconnect --- */
-const handleDisconnect = async () => {
-    await disconnect()
-    cameraConfig.value = null
-    testImageUrl.value = null
-    testStatus.value = 'idle'
+/* =========================================================
+   Config keys yang ditampilkan (dari camera)
+   ========================================================= */
+const CAMERA_CONFIG_KEYS = [
+    { key: 'iso', label: 'ISO' },
+    { key: 'aperture', label: 'Aperture' },
+    {
+        key: 'shutter-speed',
+        label: 'Shutter Speed',
+        aliases: ['shutterspeed', 'shutter_speed'],
+    },
+    {
+        key: 'whitebalance',
+        label: 'White Balance',
+        aliases: ['white-balance', 'white_balance'],
+    },
+    {
+        key: 'capturemode',
+        label: 'Capture Mode',
+        aliases: ['capture-mode', 'capture_mode'],
+    },
+    {
+        key: 'imageformat',
+        label: 'Image Format',
+        aliases: ['image-format', 'image_format', 'imagequality'],
+    },
+] as const
+
+interface ConfigNode {
+    key: string
+    label: string
+    current: string | number | null
+    choices: string[]
+    writable: boolean
 }
 
-/* --- Test capture --- */
+function findConfigNode(config: any, keys: readonly string[]): any {
+    if (!config) return null
+    for (const k of keys) {
+        if (config[k]) return config[k]
+    }
+    return null
+}
+
+const availableConfigs = computed<ConfigNode[]>(() => {
+    if (!cameraConfig.value) return []
+
+    const result: ConfigNode[] = []
+
+    CAMERA_CONFIG_KEYS.forEach((def) => {
+        const keys = [def.key, ...((def as any).aliases ?? [])]
+        const node = findConfigNode(cameraConfig.value, keys)
+
+        if (!node) return
+
+        let choices: string[] = []
+        if (Array.isArray(node.choices)) {
+            choices = node.choices.map(String)
+        } else if (Array.isArray(node.choices?.values)) {
+            choices = node.choices.values.map(String)
+        } else if (Array.isArray(node.values)) {
+            choices = node.values.map(String)
+        }
+
+        result.push({
+            key: def.key,
+            label: def.label,
+            current: node.current ?? node.value ?? null,
+            choices,
+            writable: node.readonly !== true,
+        })
+    })
+
+    return result
+})
+
+/* =========================================================
+   Test capture overlay
+   ========================================================= */
+const testStatus = ref<'idle' | 'capturing' | 'success' | 'error'>('idle')
+const testImageUrl = ref<string | null>(null)
+const testOverlayOpen = ref(false)
+const testOverlayRemaining = ref(0)
+const testOverlayDuration = ref(5)
+let testOverlayInterval: ReturnType<typeof setInterval> | null = null
+
+const testOverlayPercent = computed(() => {
+    if (testOverlayDuration.value <= 0) return 0
+    return (testOverlayRemaining.value / testOverlayDuration.value) * 100
+})
+
+const startTestOverlay = () => {
+    stopTestOverlay()
+    testOverlayOpen.value = true
+    testOverlayDuration.value = 5
+    testOverlayRemaining.value = 5
+
+    testOverlayInterval = setInterval(() => {
+        if (testOverlayRemaining.value > 0) {
+            testOverlayRemaining.value--
+        }
+        if (testOverlayRemaining.value <= 0) {
+            stopTestOverlay()
+        }
+    }, 1000)
+}
+
+const stopTestOverlay = () => {
+    if (testOverlayInterval) {
+        clearInterval(testOverlayInterval)
+        testOverlayInterval = null
+    }
+    testOverlayOpen.value = false
+    testOverlayRemaining.value = 0
+}
+
 const testCapture = async () => {
     if (testStatus.value === 'capturing' || !connected.value) return
 
@@ -271,81 +394,43 @@ const testCapture = async () => {
         const res = await capturePhoto()
         testImageUrl.value = res.data
         testStatus.value = 'success'
+        startTestOverlay()
     } catch (err) {
         console.error('Test capture failed:', err)
         testStatus.value = 'error'
     }
 }
 
-/* --- Update config (kirim ke kamera) --- */
+/* =========================================================
+   Update config (dropdown onchange)
+   ========================================================= */
 const updateCameraConfig = async (key: string, value: string) => {
     if (!connected.value || !value) return
+
     try {
         await setConfigValue(key, String(value))
-        // Refresh config tree (beberapa kamera butuh re-fetch)
+        // Refresh config tree
         cameraConfig.value = await getCameraConfig()
     } catch (err) {
         console.error(`Failed to set ${key}:`, err)
     }
 }
 
-/* --- Camera settings mutation --- */
-const cameraMutation = useMutation({
-    mutationFn: () => photoboothApi.saveCameraSettings(cameraForm.value),
-    onSuccess: () => {
-        queryClient.invalidateQueries({
-            queryKey: ['photobooth', 'camera-settings'],
-        })
-    },
-})
+/* =========================================================
+   Lifecycle
+   ========================================================= */
+watch(
+    () => props.show,
+    (open) => {
+        if (!open) {
+            stopPreview()
+        }
+    }
+)
 
-const cameraSaveError = ref('')
-const cameraSaveSuccess = ref(false)
-
-const submitCamera = () => {
-    cameraSaveError.value = ''
-    cameraSaveSuccess.value = false
-
-    cameraMutation.mutate(undefined, {
-        onSuccess: () => {
-            cameraSaveSuccess.value = true
-            setTimeout(() => (cameraSaveSuccess.value = false), 2500)
-        },
-        onError: (err: any) => {
-            cameraSaveError.value =
-                err?.response?.data?.message ??
-                err?.message ??
-                'Gagal menyimpan konfigurasi kamera.'
-        },
-    })
-}
-
-const cameraProcessing = computed(() => cameraMutation.isPending.value)
-
-/* --- Camera config choices (dari config tree atau fallback) --- */
-const ISO_OPTIONS = ['100', '200', '400', '800', '1600', '3200', '6400']
-const APERTURE_OPTIONS = ['f/1.8', 'f/2.0', 'f/2.8', 'f/4.0', 'f/5.6', 'f/8.0', 'f/11']
-const SHUTTER_OPTIONS = ['1/1000', '1/500', '1/250', '1/125', '1/60', '1/30', '1/15', '1/8', '1/4', '1/2', '1']
-
-const isoChoices = computed(() => {
-    const node = cameraConfig.value?.iso
-    if (node?.choices?.length) return node.choices.map(String)
-    return ISO_OPTIONS
-})
-
-const apertureChoices = computed(() => {
-    const node = cameraConfig.value?.aperture
-    if (node?.choices?.length) return node.choices.map(String)
-    return APERTURE_OPTIONS
-})
-
-const shutterChoices = computed(() => {
-    const node =
-        cameraConfig.value?.['shutter-speed'] ??
-        cameraConfig.value?.shutterspeed ??
-        cameraConfig.value?.['shutter_speed']
-    if (node?.choices?.length) return node.choices.map(String)
-    return SHUTTER_OPTIONS
+onBeforeUnmount(() => {
+    stopPreview()
+    stopTestOverlay()
 })
 
 /* =========================================================
@@ -433,9 +518,9 @@ watch(activeTab, async (tab) => {
     }
 })
 
-onBeforeUnmount(() => {
-    stopPreview()
-})
+// onBeforeUnmount(() => {
+//     stopPreview()
+// })
 </script>
 
 <template>
@@ -536,8 +621,8 @@ onBeforeUnmount(() => {
             </div>
 
             <!-- ====================================================
-                 TAB: CAMERA
-                 ==================================================== -->
+     TAB: CAMERA
+     ==================================================== -->
             <div v-else-if="activeTab === 'camera'" class="space-y-5">
                 <!-- Error banner -->
                 <div v-if="cameraError" class="flex items-start gap-3 border-2 border-ink bg-rose p-4">
@@ -552,8 +637,8 @@ onBeforeUnmount(() => {
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
-                    <!-- ============ LEFT: Live Preview ============ -->
+                <div class="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+                    <!-- ============ LEFT: Live Preview + Test Overlay ============ -->
                     <div class="space-y-3">
                         <div class="flex items-center justify-between">
                             <p class="eyebrow text-ink/60">Live Preview</p>
@@ -566,204 +651,227 @@ onBeforeUnmount(() => {
                             </Badge>
                         </div>
 
+                        <!-- Preview container -->
                         <div class="relative aspect-[4/3] overflow-hidden border-2 border-ink bg-ink">
+                            <!-- Live preview -->
                             <img v-if="livePreviewUrl" :src="livePreviewUrl" alt="Live preview"
                                 class="h-full w-full object-contain" />
+
+                            <!-- Empty state -->
                             <div v-else class="grid h-full w-full place-items-center text-center">
                                 <div class="p-6">
                                     <CameraIcon class="mx-auto h-12 w-12 text-white/30" />
                                     <p class="mt-3 text-[13px] text-white/60">
                                         {{
-                                            connected
-                                                ? 'Menunggu frame...'
-                                                : 'Hubungkan kamera untuk memulai preview'
+                                            detecting
+                                                ? 'Mendeteksi kamera...'
+                                                : connecting
+                                                    ? 'Menghubungkan...'
+                                                    : cameras.length === 0
+                                                        ? 'Tidak ada kamera terdeteksi'
+                                                        : 'Pilih kamera untuk memulai preview'
                                         }}
                                     </p>
                                 </div>
                             </div>
 
-                            <div v-if="connected && livePreviewUrl"
+                            <!-- LIVE badge -->
+                            <div v-if="connected && livePreviewUrl && !testOverlayOpen"
                                 class="absolute left-3 top-3 inline-flex items-center gap-1.5 border border-lime/40 bg-ink/70 px-2 py-0.5 backdrop-blur-sm">
                                 <span class="h-2 w-2 animate-pulse rounded-full bg-rose" />
                                 <span class="text-[10px] font-bold uppercase tracking-wider text-lime">
                                     LIVE
                                 </span>
                             </div>
-                        </div>
 
-                        <!-- Buttons -->
-                        <div class="flex flex-wrap gap-2">
-                            <Button v-if="!connected" variant="primary" size="sm" :icon="CameraIcon"
-                                :loading="detecting || connecting" :disabled="detecting || connecting"
-                                @click="handleConnect">
-                                {{
-                                    detecting
-                                        ? 'Mendeteksi...'
-                                        : connecting
-                                            ? 'Menghubungkan...'
-                                            : 'Hubungkan Kamera'
-                                }}
-                            </Button>
-                            <Button v-else variant="paper" size="sm" :icon="XMarkIcon" @click="handleDisconnect">
-                                Disconnect
-                            </Button>
+                            <!-- Test capture overlay -->
+                            <Transition enter-active-class="transition duration-300 ease-out"
+                                enter-from-class="opacity-0" enter-to-class="opacity-100"
+                                leave-active-class="transition duration-200 ease-in" leave-from-class="opacity-100"
+                                leave-to-class="opacity-0">
+                                <div v-if="testOverlayOpen && testImageUrl"
+                                    class="absolute inset-0 z-20 flex flex-col bg-ink">
+                                    <!-- TOP PROGRESS BAR -->
+                                    <div class="shrink-0 border-b-2 border-ink bg-paper-soft">
+                                        <div class="h-1.5 w-full bg-paper" role="progressbar"
+                                            :aria-valuenow="testOverlayRemaining" aria-valuemin="0"
+                                            :aria-valuemax="testOverlayDuration">
+                                            <div class="h-full bg-blue transition-[width] duration-1000 ease-linear"
+                                                :style="{
+                                                    width: testOverlayPercent + '%',
+                                                }" />
+                                        </div>
 
-                            <Button v-if="connected" :variant="testStatus === 'success' ? 'lime' : 'paper'
-                                " size="sm" :icon="testStatus === 'success'
-                                    ? CheckCircleIcon
-                                    : PlayIcon
-                                    " :loading="testStatus === 'capturing'" :disabled="testStatus === 'capturing'"
-                                @click="testCapture">
-                                {{
-                                    testStatus === 'capturing'
-                                        ? 'Mengambil...'
-                                        : testStatus === 'success'
-                                            ? 'Berhasil!'
-                                            : testStatus === 'error'
-                                                ? 'Gagal — Coba Lagi'
-                                                : 'Test Kamera'
-                                }}
-                            </Button>
-                        </div>
+                                        <div class="flex items-center justify-between gap-3 px-4 py-2.5">
+                                            <div class="flex min-w-0 items-center gap-2.5">
+                                                <span
+                                                    class="grid h-7 w-7 shrink-0 place-items-center border-2 border-ink bg-lime">
+                                                    <CheckCircleIcon class="h-3.5 w-3.5 text-ink" />
+                                                </span>
+                                                <p class="display truncate text-[12.5px] font-bold text-ink">
+                                                    Hasil Test Kamera
+                                                </p>
+                                            </div>
 
-                        <!-- Detected cameras -->
-                        <div v-if="cameras.length > 0" class="border-2 border-ink bg-paper-soft p-3">
-                            <p class="eyebrow mb-2 text-ink/50">
-                                Kamera Terdeteksi ({{ cameras.length }})
-                            </p>
-                            <ul class="space-y-1">
-                                <li v-for="(cam, idx) in cameras" :key="idx"
-                                    class="display text-[12px] font-semibold text-ink">
-                                    {{ idx + 1 }}. {{ cam.model }}
-                                    <span v-if="cam.port" class="text-ink/50">
-                                        — {{ cam.port }}
-                                    </span>
-                                </li>
-                            </ul>
-                        </div>
+                                            <div class="flex shrink-0 items-center gap-2">
+                                                <span class="display text-base font-bold tabular-nums text-ink">
+                                                    {{ testOverlayRemaining }}s
+                                                </span>
+                                                <button type="button"
+                                                    class="grid h-7 w-7 place-items-center border-2 border-ink bg-paper-soft transition-colors hover:bg-lime"
+                                                    aria-label="Tutup" @click="stopTestOverlay">
+                                                    <XMarkIcon class="h-3.5 w-3.5" />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
 
-                        <!-- Test result -->
-                        <div v-if="testImageUrl" class="relative overflow-hidden border-2 border-ink bg-ink">
-                            <img :src="testImageUrl" alt="Test capture" class="h-auto w-full object-contain" />
-                            <div
-                                class="absolute left-3 top-3 border border-lime/40 bg-ink/70 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-lime backdrop-blur-sm">
-                                Hasil Test
+                                    <!-- PHOTO -->
+                                    <div class="relative grid min-h-0 flex-1 place-items-center p-3">
+                                        <img :src="testImageUrl" alt="Test capture result"
+                                            class="max-h-full max-w-full object-contain" />
+                                    </div>
+
+                                    <!-- BOTTOM HINT -->
+                                    <div class="shrink-0 border-t-2 border-ink bg-paper-soft px-4 py-2 text-center">
+                                        <p class="text-[10.5px] uppercase tracking-[.2em] text-ink/45">
+                                            Otomatis tutup dalam
+                                            {{ testOverlayRemaining }} detik
+                                        </p>
+                                    </div>
+                                </div>
+                            </Transition>
+
+                            <!-- Test button (tengah) -->
+                            <div v-if="connected && !testOverlayOpen"
+                                class="pointer-events-none absolute inset-0 z-10 grid place-items-center">
+                                <button type="button"
+                                    class="pointer-events-auto display inline-flex items-center gap-3 border-4 border-ink bg-lime px-6 py-3 text-base font-bold text-ink shadow-brutal-lg transition-all duration-150 active:translate-y-1 active:shadow-brutal-sm disabled:cursor-wait disabled:opacity-60"
+                                    :disabled="testStatus === 'capturing'" @click="testCapture">
+                                    <PlayIcon class="h-5 w-5" :class="testStatus === 'capturing' && 'animate-pulse'
+                                        " />
+                                    {{
+                                        testStatus === 'capturing'
+                                            ? 'Mengambil...'
+                                            : 'Tes Kamera'
+                                    }}
+                                </button>
                             </div>
                         </div>
                     </div>
 
-                    <!-- ============ RIGHT: Config ============ -->
+                    <!-- ============ RIGHT: Dynamic Config ============ -->
                     <div class="space-y-4">
-                        <Input v-model="cameraForm.camera_name" label="Nama Kamera" placeholder="cth. Canon EOS 5D"
-                            hint="Label untuk kamera ini" />
+                        <!-- ========== CAMERA DROPDOWN ========== -->
+                        <div>
+                            <div class="mb-2 flex items-center justify-between">
+                                <label class="eyebrow text-ink/60">Kamera</label>
+                                <button type="button"
+                                    class="inline-flex items-center gap-1.5 text-[11px] font-semibold text-blue hover:underline disabled:opacity-50"
+                                    :disabled="detecting" @click="detect">
+                                    <ArrowPathIcon class="h-3 w-3" :class="detecting && 'animate-spin'" />
+                                    {{ detecting ? 'Mendeteksi...' : 'Refresh' }}
+                                </button>
+                            </div>
 
-                        <!-- Supported keys (dari config tree) -->
-                        <div v-if="connected && supportedKeys.length > 0" class="border-2 border-ink bg-paper-soft p-3">
-                            <p class="eyebrow mb-2 text-ink/50">
-                                Config Tersedia ({{ supportedKeys.length }})
+                            <!-- Loading -->
+                            <div v-if="detecting && cameras.length === 0"
+                                class="flex items-center gap-2 border-2 border-ink bg-paper-soft px-3 py-2.5">
+                                <div class="h-4 w-4 animate-spin border-2 border-ink/20 border-t-ink" />
+                                <span class="text-[12.5px] text-ink/60">
+                                    Mencari kamera...
+                                </span>
+                            </div>
+
+                            <!-- No cameras -->
+                            <div v-else-if="cameras.length === 0"
+                                class="flex items-start gap-2 border-2 border-ink bg-amber p-3">
+                                <ExclamationTriangleIcon class="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink" />
+                                <p class="text-[12px] leading-5 text-ink/80">
+                                    Tidak ada kamera terdeteksi. Pastikan kamera sudah
+                                    tercolok & dalam mode PTP.
+                                </p>
+                            </div>
+
+                            <!-- Dropdown -->
+                            <select v-else :value="selectedCameraId ?? ''"
+                                class="w-full border-2 border-ink bg-paper-soft px-3 py-2.5 text-[13px] text-ink focus:border-blue focus:outline-none"
+                                :disabled="connecting" @change="
+                                    handleCameraChange(
+                                        ($event.target as HTMLSelectElement).value
+                                    )
+                                    ">
+                                <option value="" disabled>Pilih kamera</option>
+                                <option v-for="cam in cameras" :key="cam.id" :value="cam.id">
+                                    {{ cam.model }}
+                                    <span v-if="cam.port"> — {{ cam.port }}</span>
+                                </option>
+                            </select>
+                            <p v-if="connecting" class="mt-1.5 text-[11.5px] text-ink/55">
+                                Menghubungkan ke kamera...
                             </p>
-                            <div class="flex flex-wrap gap-1">
-                                <span v-for="key in supportedKeys.slice(0, 15)" :key="key"
-                                    class="display border border-ink/20 bg-paper px-1.5 py-0.5 text-[10px] font-semibold text-ink/70">
-                                    {{ key }}
-                                </span>
-                                <span v-if="supportedKeys.length > 15" class="text-[10px] text-ink/50">
-                                    +{{ supportedKeys.length - 15 }} lainnya
-                                </span>
-                            </div>
                         </div>
 
-                        <!-- ISO -->
-                        <div>
-                            <label class="eyebrow mb-2 block text-ink/60">
-                                ISO
-                            </label>
-                            <div class="flex flex-wrap gap-1.5">
-                                <button v-for="opt in isoChoices" :key="opt" type="button"
-                                    class="display border-2 px-3 py-1.5 text-[12px] font-bold transition-colors" :class="cameraForm.iso === opt
-                                        ? 'border-ink bg-ink text-white'
-                                        : 'border-ink/20 bg-paper-soft text-ink hover:border-ink hover:bg-lime'
-                                        " :disabled="!connected" @click="
-                                            cameraForm.iso = opt;
-                                        updateCameraConfig('iso', opt)
-                                            ">
-                                    {{ opt }}
-                                </button>
-                            </div>
+                        <!-- ========== CONFIG DROPDOWNS ========== -->
+                        <!-- Loading config -->
+                        <div v-if="connected && !cameraConfig"
+                            class="flex items-center gap-2 border-2 border-ink bg-paper-soft px-3 py-2.5">
+                            <div class="h-4 w-4 animate-spin border-2 border-ink/20 border-t-ink" />
+                            <span class="text-[12.5px] text-ink/60">
+                                Memuat konfigurasi kamera...
+                            </span>
                         </div>
 
-                        <!-- Aperture -->
-                        <div>
-                            <label class="eyebrow mb-2 block text-ink/60">
-                                Aperture
-                            </label>
-                            <div class="flex flex-wrap gap-1.5">
-                                <button v-for="opt in apertureChoices" :key="opt" type="button"
-                                    class="display border-2 px-3 py-1.5 text-[12px] font-bold transition-colors" :class="cameraForm.aperture === opt
-                                        ? 'border-ink bg-ink text-white'
-                                        : 'border-ink/20 bg-paper-soft text-ink hover:border-ink hover:bg-lime'
-                                        " :disabled="!connected" @click="
-                                            cameraForm.aperture = opt;
-                                        updateCameraConfig('aperture', opt)
-                                            ">
-                                    {{ opt }}
-                                </button>
-                            </div>
+                        <!-- Config tidak tersedia -->
+                        <div v-else-if="connected && availableConfigs.length === 0"
+                            class="flex items-start gap-2 border-2 border-ink/20 bg-paper-soft p-3">
+                            <InformationCircleIcon class="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink/50" />
+                            <p class="text-[11.5px] leading-5 text-ink/60">
+                                Kamera tidak expose konfigurasi (ISO, Aperture, dll).
+                            </p>
                         </div>
 
-                        <!-- Shutter Speed -->
-                        <div>
-                            <label class="eyebrow mb-2 block text-ink/60">
-                                Shutter Speed
-                            </label>
-                            <div class="flex flex-wrap gap-1.5">
-                                <button v-for="opt in shutterChoices" :key="opt" type="button"
-                                    class="display border-2 px-3 py-1.5 text-[12px] font-bold transition-colors" :class="cameraForm.shutter_speed === opt
-                                        ? 'border-ink bg-ink text-white'
-                                        : 'border-ink/20 bg-paper-soft text-ink hover:border-ink hover:bg-lime'
-                                        " :disabled="!connected" @click="
-                                            cameraForm.shutter_speed = opt;
-                                        updateCameraConfig('shutter-speed', opt)
-                                            ">
-                                    {{ opt }}
-                                </button>
-                            </div>
+                        <!-- Config tidak connected -->
+                        <div v-else-if="!connected"
+                            class="flex items-start gap-2 border-2 border-ink/20 bg-paper-soft p-3">
+                            <InformationCircleIcon class="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink/50" />
+                            <p class="text-[11.5px] leading-5 text-ink/60">
+                                Pilih kamera dulu untuk melihat konfigurasi.
+                            </p>
                         </div>
 
-                        <!-- Info hint -->
+                        <!-- Dynamic config dropdowns -->
+                        <template v-else>
+                            <div v-for="cfg in availableConfigs" :key="cfg.key" class="space-y-1.5">
+                                <label class="eyebrow block text-ink/60">
+                                    {{ cfg.label }}
+                                </label>
+
+                                <select :value="cfg.current ?? ''"
+                                    class="w-full border-2 border-ink bg-paper-soft px-3 py-2.5 text-[13px] text-ink focus:border-blue focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                                    :disabled="!cfg.writable || cfg.choices.length === 0" @change="
+                                        updateCameraConfig(
+                                            cfg.key,
+                                            ($event.target as HTMLSelectElement).value
+                                        )
+                                        ">
+                                    <option v-if="cfg.choices.length === 0" :value="cfg.current ?? ''">
+                                        {{ cfg.current ?? '(tidak ada opsi)' }}
+                                    </option>
+                                    <option v-for="opt in cfg.choices" :key="opt" :value="opt">
+                                        {{ opt }}
+                                    </option>
+                                </select>
+                            </div>
+                        </template>
+
+                        <!-- Info -->
                         <div class="flex items-start gap-2 border-2 border-ink/20 bg-paper-soft p-3">
                             <InformationCircleIcon class="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink/50" />
                             <p class="text-[11.5px] leading-5 text-ink/60">
-                                Konfigurasi disimpan sebagai default kiosk. Perubahan
-                                dikirim langsung ke kamera saat terhubung.
+                                Konfigurasi diambil langsung dari kamera. Perubahan
+                                dikirim langsung ke kamera saat dipilih.
                             </p>
-                        </div>
-
-                        <!-- Feedback -->
-                        <div v-if="cameraSaveError" class="flex items-start gap-2 border-2 border-ink bg-rose p-3">
-                            <XCircleIcon class="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink" />
-                            <p class="text-[12px] leading-5 text-ink">
-                                {{ cameraSaveError }}
-                            </p>
-                        </div>
-
-                        <div v-if="cameraSaveSuccess" class="flex items-start gap-2 border-2 border-ink bg-lime p-3">
-                            <CheckCircleIcon class="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink" />
-                            <p class="text-[12px] leading-5 text-ink">
-                                Konfigurasi kamera berhasil disimpan.
-                            </p>
-                        </div>
-
-                        <!-- Save -->
-                        <div class="flex justify-end gap-2 border-t-2 border-ink pt-4">
-                            <Button type="button" variant="primary" size="sm" :icon="CheckCircleIcon"
-                                :loading="cameraProcessing" :disabled="cameraProcessing" @click="submitCamera">
-                                {{
-                                    cameraProcessing
-                                        ? 'Menyimpan...'
-                                        : 'Simpan Kamera'
-                                }}
-                            </Button>
                         </div>
                     </div>
                 </div>
