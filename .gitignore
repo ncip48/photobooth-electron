@@ -1,0 +1,242 @@
+```gitignore
+# ============================================================
+# Dependencies
+# ============================================================
+
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+.pnp/
+.pnp.js
+
+
+# ============================================================
+# Environment / Secrets
+# ============================================================
+
+.env
+.env.local
+.env.*.local
+
+# Keep example environment file
+!.env.example
+
+
+# ============================================================
+# Build / Distribution
+# ============================================================
+
+dist/
+dist-electron/
+out/
+build/
+
+# Electron Builder
+release/
+releases/
+
+# Temporary build directories
+.tmp/
+.temp/
+
+
+# ============================================================
+# Vite
+# ============================================================
+
+.vite/
+.vite-cache/
+
+
+# ============================================================
+# TypeScript
+# ============================================================
+
+*.tsbuildinfo
+
+
+# ============================================================
+# Electron / Native Modules
+# ============================================================
+
+# Native build output
+**/build/
+**/Release/
+**/Debug/
+
+# Electron native rebuild artifacts
+electron-rebuild.log
+
+# Native module binaries
+*.node
+
+# Exception: source/native binaries intentionally bundled
+# in resources should be committed if they are required
+# for production distribution.
+
+
+# ============================================================
+# gphoto2
+# ============================================================
+
+# Local development/build artifacts
+gphoto2-build/
+gphoto2-temp/
+
+# DO NOT ignore production runtime resources if you
+# intentionally commit the DLL bundle.
+#
+# resources/gphoto2/win32/
+
+
+# ============================================================
+# Logs
+# ============================================================
+
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+lerna-debug.log*
+
+logs/
+*.log
+
+
+# ============================================================
+# OS
+# ============================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+
+# ============================================================
+# IDE / Editors
+# ============================================================
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# JetBrains
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Vim
+*.swp
+*.swo
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+
+# ============================================================
+# Testing / Coverage
+# ============================================================
+
+coverage/
+.nyc_output/
+.vitest/
+playwright-report/
+test-results/
+
+
+# ============================================================
+# Cache
+# ============================================================
+
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+
+
+# ============================================================
+# Temporary files
+# ============================================================
+
+*.tmp
+*.temp
+*.bak
+*.backup
+
+tmp/
+temp/
+
+
+# ============================================================
+# Local database / application data
+# ============================================================
+
+*.sqlite
+*.sqlite3
+*.db
+
+# Local Electron application data
+electron-data/
+.local-data/
+
+
+# ============================================================
+# Generated assets
+# ============================================================
+
+generated/
+generated-assets/
+
+# Uploaded/local camera files
+captures/
+photos/
+screenshots/
+
+
+# ============================================================
+# Packaging
+# ============================================================
+
+*.dmg
+*.exe
+*.msi
+*.app
+*.deb
+*.rpm
+*.AppImage
+*.snap
+*.zip
+
+
+# ============================================================
+# pnpm
+# ============================================================
+
+# pnpm debug/log files
+.pnpm-debug.log*
+
+
+# ============================================================
+# Local configuration
+# ============================================================
+
+*.local.json
+config.local.*
+```

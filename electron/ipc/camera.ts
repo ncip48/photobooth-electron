@@ -1,0 +1,123 @@
+import type { IpcMain } from 'electron'
+import { cameraService } from '../services/CameraService'
+
+export function registerCameraHandlers(ipcMain: IpcMain): void {
+    /* =========================================================
+       Detect / list cameras
+       ========================================================= */
+    ipcMain.handle('camera:list', async () => {
+        try {
+            const cameras = await cameraService.list()
+            return { success: true, cameras }
+        } catch (err: any) {
+            return {
+                success: false,
+                error: err?.message ?? 'Failed to list cameras.',
+                cameras: [],
+            }
+        }
+    })
+
+    /* =========================================================
+       Connect
+       ========================================================= */
+    ipcMain.handle('camera:connect', async (_e, payload?: { index?: number }) => {
+        try {
+            const result = await cameraService.connect(payload?.index ?? 0)
+            return { success: true, model: result.model }
+        } catch (err: any) {
+            return {
+                success: false,
+                error: err?.message ?? 'Failed to connect camera.',
+            }
+        }
+    })
+
+    /* =========================================================
+       Disconnect
+       ========================================================= */
+    ipcMain.handle('camera:disconnect', async () => {
+        try {
+            await cameraService.disconnect()
+            return { success: true }
+        } catch (err: any) {
+            return { success: false, error: err?.message }
+        }
+    })
+
+    /* =========================================================
+       Status
+       ========================================================= */
+    ipcMain.handle('camera:status', () => {
+        return { success: true, ...cameraService.getStatus() }
+    })
+
+    /* =========================================================
+       Config
+       ========================================================= */
+    ipcMain.handle('camera:get-config', async () => {
+        try {
+            const config = await cameraService.getConfig()
+            return { success: true, config }
+        } catch (err: any) {
+            return { success: false, error: err?.message }
+        }
+    })
+
+    ipcMain.handle(
+        'camera:set-config',
+        async (_e, payload: { name: string; value: string | number }) => {
+            try {
+                await cameraService.setConfigValue(payload.name, payload.value)
+                return { success: true }
+            } catch (err: any) {
+                return { success: false, error: err?.message }
+            }
+        }
+    )
+
+    /* =========================================================
+       Preview (live view)
+       ========================================================= */
+    ipcMain.handle('camera:preview', async () => {
+        try {
+            const base64 = await cameraService.capturePreview()
+            return { success: true, data: base64 }
+        } catch (err: any) {
+            return { success: false, error: err?.message }
+        }
+    })
+
+    /* =========================================================
+       Capture full image
+       ========================================================= */
+    ipcMain.handle('camera:capture', async () => {
+        try {
+            const { base64, buffer } = await cameraService.captureImage()
+            return {
+                success: true,
+                data: base64,
+                size: buffer.length,
+            }
+        } catch (err: any) {
+            return { success: false, error: err?.message }
+        }
+    })
+
+    /* =========================================================
+       Capture + save to disk (untuk session)
+       ========================================================= */
+    ipcMain.handle(
+        'camera:capture-to-file',
+        async (_e, payload: { sessionId: string }) => {
+            try {
+                const result = await cameraService.captureToFile(
+                    payload?.sessionId ?? 'default'
+                )
+                return { success: true, ...result }
+            } catch (err: any) {
+                return { success: false, error: err?.message }
+            }
+        }
+    )
+}

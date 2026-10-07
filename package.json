@@ -1,0 +1,65 @@
+{
+    "name": "photobooth-app",
+    "version": "0.1.0",
+    "description": "HeloraBooth Photobooth Desktop App",
+    "main": "./out/main/index.js",
+    "author": "HeloraBooth",
+    "license": "MIT",
+    "type": "module",
+    "scripts": {
+        "dev": "electron-vite dev",
+        "build": "electron-vite build",
+        "preview": "electron-vite preview",
+        "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+        "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json --composite false",
+        "typecheck": "npm run typecheck:node && npm run typecheck:web",
+        "build:win": "npm run build && electron-builder --win",
+        "build:mac": "npm run build && electron-builder --mac",
+        "build:linux": "npm run build && electron-builder --linux",
+        "postinstall": "electron-rebuild -f -w gphoto2",
+        "rebuild": "electron-rebuild -f -w gphoto2"
+    },
+    "dependencies": {
+        "@tanstack/vue-query": "^5.59.0",
+        "axios": "^1.7.7",
+        "electron-store": "^10.0.0",
+        "gphoto2": "^0.3.2",
+        "pinia": "^2.2.4",
+        "vue": "^3.5.12",
+        "vue-router": "^4.4.5",
+        "web-gphoto2": "^0.4.1"
+    },
+    "devDependencies": {
+        "@electron-toolkit/preload": "^3.0.1",
+        "@electron-toolkit/tsconfig": "^2.0.0",
+        "@electron-toolkit/utils": "^3.0.0",
+        "@electron/rebuild": "^4.2.1",
+        "@heroicons/vue": "^2.1.5",
+        "@tailwindcss/postcss": "^4.0.0",
+        "@types/node": "^22.7.5",
+        "@vitejs/plugin-vue": "^5.1.4",
+        "autoprefixer": "^10.4.20",
+        "electron": "^33.0.0",
+        "electron-builder": "^25.1.8",
+        "electron-vite": "^2.3.0",
+        "postcss": "^8.4.47",
+        "tailwindcss": "^4.0.0",
+        "typescript": "^5.6.3",
+        "vite": "^5.4.10",
+        "vue-tsc": "^2.1.6"
+    },
+    "pnpm": {
+        "ignoredBuiltDependencies": [
+            "electron",
+            "esbuild",
+            "vue-demi"
+        ],
+        "onlyBuiltDependencies": [
+            "electron",
+            "esbuild",
+            "gphoto2",
+            "@tailwindcss/oxide",
+            "vue-demi"
+        ]
+    }
+}
