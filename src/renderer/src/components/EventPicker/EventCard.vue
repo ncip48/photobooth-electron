@@ -25,7 +25,7 @@ const emit = defineEmits<{
         :class="current && 'ring-4 ring-blue'" @click="emit('select')">
 
         <!-- Thumbnail -->
-        <div class="relative h-40 border-b-2 border-ink bg-ink">
+        <div class="relative h-40 border-b-2 border-ink bg-ink w-full">
             <img v-if="event.background_url" :src="event.background_url" :alt="event.title"
                 class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" />
             <div v-else class="grid-pattern h-full w-full opacity-40" />
