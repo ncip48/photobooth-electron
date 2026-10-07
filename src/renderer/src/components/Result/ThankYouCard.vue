@@ -1,5 +1,21 @@
 <script setup lang="ts">
 import { SparklesIcon } from '@heroicons/vue/24/outline'
+import ResultHeader from '@/components/Result/ResultHeader.vue'
+
+withDefaults(
+    defineProps<{
+        mmss?: string
+        isExpired?: boolean
+        isLowTime?: boolean
+        loading?: boolean
+    }>(),
+    {
+        mmss: '00:00',
+        isExpired: false,
+        isLowTime: false,
+        loading: false,
+    }
+)
 </script>
 
 <template>
@@ -9,12 +25,14 @@ import { SparklesIcon } from '@heroicons/vue/24/outline'
                 <span class="grid h-10 w-10 shrink-0 place-items-center border-2 border-ink bg-paper-soft">
                     <SparklesIcon class="h-5 w-5 text-ink" />
                 </span>
-                <div>
+                <div class="w-full">
                     <p class="eyebrow text-ink/60">Terima Kasih!</p>
                     <p class="display mt-1 text-xl font-bold leading-tight tracking-tight text-ink">
                         Senang melayani Anda
                     </p>
                 </div>
+                <!-- Timer -->
+                <ResultHeader :mmss="mmss" :is-expired="isExpired" :is-low-time="isLowTime" :loading="loading" />
             </div>
         </div>
 

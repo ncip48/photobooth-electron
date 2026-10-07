@@ -18,23 +18,23 @@ withDefaults(
 </script>
 
 <template>
-    <div class="pointer-events-none absolute right-4 top-4 z-40 sm:right-6 sm:top-6">
+    <div class="pointer-events-none z-40 ">
         <div class="pointer-events-auto flex items-center gap-2.5 border-2 px-4 py-2.5 shadow-brutal-sm transition-colors"
             :class="loading
-                    ? 'border-ink/20 bg-paper-soft'
-                    : isExpired
-                        ? 'border-[#b3261e] bg-rose'
-                        : isLowTime
-                            ? 'border-ink bg-amber'
-                            : 'border-ink bg-paper-soft'
+                ? 'border-ink/20 bg-paper-soft'
+                : isExpired
+                    ? 'border-[#b3261e] bg-rose'
+                    : isLowTime
+                        ? 'border-ink bg-amber'
+                        : 'border-ink bg-paper-soft'
                 ">
             <template v-if="loading">
                 <span class="inline-block h-5 w-16 animate-pulse bg-ink/10" />
             </template>
             <template v-else>
                 <ClockIcon class="h-4 w-4 shrink-0" :class="isLowTime && !isExpired
-                        ? 'animate-pulse text-ink'
-                        : 'text-ink/60'
+                    ? 'animate-pulse text-ink'
+                    : 'text-ink/60'
                     " />
                 <span class="display text-xl font-bold leading-none tracking-tight tabular-nums text-ink">
                     {{ mmss }}

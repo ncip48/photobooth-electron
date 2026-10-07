@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import ResultHeader from '@/components/Result/ResultHeader.vue'
 import PhotostripPreview from '@/components/Result/PhotostripPreview.vue'
 import ThankYouCard from '@/components/Result/ThankYouCard.vue'
 import SharePanel from '@/components/Result/SharePanel.vue'
@@ -105,18 +104,15 @@ onBeforeUnmount(() => {
 
 <template>
     <div class="relative flex h-screen w-screen flex-col overflow-hidden bg-paper text-ink">
-        <!-- Timer -->
-        <ResultHeader :mmss="mmss" :is-expired="isExpired" :is-low-time="isLowTime" :loading="isLoading" />
-
         <!-- Main grid -->
         <main
-            class="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden p-4 pt-20 sm:gap-5 sm:p-6 sm:pt-24 lg:grid-cols-[530px_minmax(0,1fr)] lg:justify-center">
+            class="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden p-4 sm:gap-5 sm:p-6 lg:grid-cols-[560px_minmax(0,1fr)] lg:justify-center">
             <!-- KIRI: Photostrip -->
             <PhotostripPreview :photostrip="photostrip" :event-title="event?.title" :loading="isLoading" />
 
             <!-- KANAN: Ucapan + Share + Warning + Selesai -->
             <aside class="flex min-h-0 flex-col gap-4">
-                <ThankYouCard />
+                <ThankYouCard :mmss="mmss" :is-expired="isExpired" :is-low-time="isLowTime" :loading="isLoading" />
 
                 <SharePanel :qr-url="qrUrl" :public-url="publicUrl" :email-sending="emailSending"
                     :email-sent="emailSent" :email-message="emailMessage" :email-error="emailError" :loading="isLoading"
