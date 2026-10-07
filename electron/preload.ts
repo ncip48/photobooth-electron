@@ -26,7 +26,9 @@ const api = {
     // Print
     print: {
         list: () => ipcRenderer.invoke('print:list'),
-        send: (payload: any) => ipcRenderer.invoke('print:send', payload),
+        send: (options: any) => ipcRenderer.invoke('print:send', options),
+        openDialog: (options?: any) =>
+            ipcRenderer.invoke('print:open-dialog', options),
     },
 
     // Store

@@ -25,6 +25,13 @@ import {
     useActiveEvent,
 } from '@/composables/useEvents'
 
+// import PrintSettingsModal from '@/components/Start/PrintSettingsModal.vue'
+
+import { usePrint } from '@/composables/usePrint'
+
+// const { settings: printSettings } = usePrint()
+// const showPrintModal = ref(false)
+
 /* =========================================================
    Props & Emits
    ========================================================= */
@@ -360,6 +367,71 @@ const { setDefaultEvent } = useActiveEvent()
 const openEventPicker = () => {
     emit('go-to-event-picker')
 }
+
+/* =========================================================
+   ============ TAB: PRINT ============
+   ========================================================= */
+const {
+    printers,
+    loading: printLoading,
+    printing,
+    error: printError,
+    settings: printSettings,
+    loadPrinters,
+    updateSettings: updatePrintSettings,
+    resetSettings: resetPrintSettings,
+} = usePrint()
+
+/* Paper sizes (mm) untuk preview */
+const PAPER_SIZES: Record<string, { width: number; height: number; label: string }> = {
+    '4x6': { width: 101.6, height: 152.4, label: '4×6 inci' },
+    '5x7': { width: 127, height: 177.8, label: '5×7 inci' },
+    A4: { width: 210, height: 297, label: 'A4' },
+    Letter: { width: 215.9, height: 279.4, label: 'Letter' },
+}
+
+const currentPaper = computed(
+    () => PAPER_SIZES[printSettings.value.pageSize] ?? PAPER_SIZES['4x6']
+)
+
+/* ============ Preview dimensions ============ */
+const PREVIEW_MAX_WIDTH = 240
+
+const printPreviewDimensions = computed(() => {
+    const paper = currentPaper.value
+    const aspect = paper.width / paper.height
+    const width = PREVIEW_MAX_WIDTH
+    const height = width / aspect
+    return { width, height }
+})
+
+const printScaledDimensions = computed(() => {
+    const s = printSettings.value.scaleFactor / 100
+    return {
+        width: printPreviewDimensions.value.width * s,
+        height: printPreviewDimensions.value.height * s,
+    }
+})
+
+const printMarginDisplay = computed(() => {
+    const paper = currentPaper.value
+    const displayWidthPx = printPreviewDimensions.value.width
+    const mmToPx = displayWidthPx / paper.width
+
+    return {
+        top: printSettings.value.marginTop * mmToPx,
+        bottom: printSettings.value.marginBottom * mmToPx,
+        left: printSettings.value.marginLeft * mmToPx,
+        right: printSettings.value.marginRight * mmToPx,
+    }
+})
+
+/* Load printers saat tab Print dibuka */
+watch(activeTab, async (tab) => {
+    if (tab === 'print' && printers.value.length === 0) {
+        await loadPrinters()
+    }
+})
 
 onBeforeUnmount(() => {
     stopPreview()
@@ -698,23 +770,226 @@ onBeforeUnmount(() => {
             </div>
 
             <!-- ====================================================
-                 TAB: PRINT
-                 ==================================================== -->
+     TAB: PRINT
+     ==================================================== -->
             <div v-else-if="activeTab === 'print'" class="space-y-5">
-                <div class="grid place-items-center border-2 border-ink bg-paper-soft px-6 py-12 text-center">
-                    <span class="grid h-16 w-16 place-items-center border-2 border-ink bg-paper">
-                        <PrinterIcon class="h-8 w-8 text-ink/40" />
-                    </span>
-                    <p class="display mt-4 text-[15px] font-bold text-ink">
-                        Pengaturan Cetak
-                    </p>
-                    <p class="mt-2 max-w-md text-[12.5px] leading-6 text-ink/60">
-                        Konfigurasi printer, ukuran kertas, jumlah cetakan, dan
-                        opsi lain akan tersedia di versi berikutnya.
-                    </p>
-                    <Badge tone="amber" class="mt-4">Segera Hadir</Badge>
+                <div class="grid grid-cols-1 gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+                    <!-- ============ LEFT: Preview ============ -->
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between">
+                            <p class="eyebrow text-ink/60">Preview</p>
+                            <Badge tone="grey">{{ currentPaper.label }}</Badge>
+                        </div>
+
+                        <!-- Preview canvas -->
+                        <div class="flex justify-center border-2 border-ink bg-paper-soft p-4">
+                            <div class="relative border-2 border-ink bg-white shadow-brutal-sm" :style="{
+                                width: printPreviewDimensions.width + 'px',
+                                height: printPreviewDimensions.height + 'px',
+                            }">
+                                <!-- Margin area -->
+                                <div class="pointer-events-none absolute border-2 border-dashed border-blue/50" :style="{
+                                    top: printMarginDisplay.top + 'px',
+                                    left: printMarginDisplay.left + 'px',
+                                    right: printMarginDisplay.right + 'px',
+                                    bottom: printMarginDisplay.bottom + 'px',
+                                }" />
+
+                                <!-- Content placeholder -->
+                                <div class="pointer-events-none absolute" :style="{
+                                    top: '50%',
+                                    left: '50%',
+                                    width: printScaledDimensions.width + 'px',
+                                    height: printScaledDimensions.height + 'px',
+                                    transform: 'translate(-50%, -50%)',
+                                }">
+                                    <div
+                                        class="grid h-full w-full place-items-center border border-dashed border-ink/30 bg-lime/20">
+                                        <PhotoIcon class="h-8 w-8 text-ink/30" />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Preview info -->
+                        <div class="grid grid-cols-2 gap-2 text-[11.5px]">
+                            <div class="border-2 border-ink/20 bg-paper-soft p-2.5">
+                                <p class="eyebrow text-ink/50">Kertas</p>
+                                <p class="display mt-0.5 font-bold text-ink">
+                                    {{ currentPaper.width }} × {{ currentPaper.height }} mm
+                                </p>
+                            </div>
+                            <div class="border-2 border-ink/20 bg-paper-soft p-2.5">
+                                <p class="eyebrow text-ink/50">Skala</p>
+                                <p class="display mt-0.5 font-bold text-ink">
+                                    {{ printSettings.scaleFactor }}%
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ============ RIGHT: Settings ============ -->
+                    <div class="space-y-5">
+                        <!-- Error banner -->
+                        <div v-if="printError" class="flex items-start gap-2 border-2 border-ink bg-rose p-3">
+                            <XCircleIcon class="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink" />
+                            <p class="text-[12px] leading-5 text-ink">
+                                {{ printError }}
+                            </p>
+                        </div>
+
+                        <!-- Printer -->
+                        <div>
+                            <label class="eyebrow mb-2 block text-ink/60">
+                                Printer
+                            </label>
+                            <div v-if="printLoading" class="text-[12.5px] text-ink/50">
+                                Memuat printer...
+                            </div>
+                            <select v-else :value="printSettings.deviceName"
+                                class="w-full border-2 border-ink bg-paper-soft px-3 py-2.5 text-[13.5px] text-ink focus:border-blue focus:outline-none"
+                                @change="
+                                    updatePrintSettings({
+                                        deviceName: ($event.target as HTMLSelectElement).value,
+                                    })
+                                    ">
+                                <option value="" disabled>Pilih printer</option>
+                                <option v-for="p in printers" :key="p.name" :value="p.name">
+                                    {{ p.displayName || p.name }}
+                                    {{ p.isDefault ? '(Default)' : '' }}
+                                </option>
+                            </select>
+                            <button type="button"
+                                class="mt-1.5 inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-blue hover:underline"
+                                @click="loadPrinters">
+                                <ArrowPathIcon class="h-3 w-3" />
+                                Refresh printer
+                            </button>
+                        </div>
+
+                        <!-- Paper Size -->
+                        <div>
+                            <label class="eyebrow mb-2 block text-ink/60">
+                                Ukuran Kertas
+                            </label>
+                            <div class="flex flex-wrap gap-2">
+                                <button v-for="(size, key) in PAPER_SIZES" :key="key" type="button"
+                                    class="display border-2 px-3 py-2 text-[12.5px] font-bold transition-colors" :class="printSettings.pageSize === key
+                                        ? 'border-ink bg-ink text-white'
+                                        : 'border-ink/20 bg-paper-soft text-ink hover:border-ink hover:bg-lime'
+                                        " @click="updatePrintSettings({ pageSize: key })">
+                                    {{ size.label }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Margins -->
+                        <div>
+                            <label class="eyebrow mb-2 block text-ink/60">
+                                Margin (mm)
+                            </label>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <p class="mb-1 text-[11px] text-ink/50">Atas</p>
+                                    <Input :model-value="printSettings.marginTop" type="number" :min="0" :max="50"
+                                        :step="0.5" @update:model-value="
+                                            (v) => updatePrintSettings({ marginTop: Number(v) })
+                                        " />
+                                </div>
+                                <div>
+                                    <p class="mb-1 text-[11px] text-ink/50">Bawah</p>
+                                    <Input :model-value="printSettings.marginBottom" type="number" :min="0" :max="50"
+                                        :step="0.5" @update:model-value="
+                                            (v) => updatePrintSettings({ marginBottom: Number(v) })
+                                        " />
+                                </div>
+                                <div>
+                                    <p class="mb-1 text-[11px] text-ink/50">Kiri</p>
+                                    <Input :model-value="printSettings.marginLeft" type="number" :min="0" :max="50"
+                                        :step="0.5" @update:model-value="
+                                            (v) => updatePrintSettings({ marginLeft: Number(v) })
+                                        " />
+                                </div>
+                                <div>
+                                    <p class="mb-1 text-[11px] text-ink/50">Kanan</p>
+                                    <Input :model-value="printSettings.marginRight" type="number" :min="0" :max="50"
+                                        :step="0.5" @update:model-value="
+                                            (v) => updatePrintSettings({ marginRight: Number(v) })
+                                        " />
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Scale -->
+                        <div>
+                            <div class="mb-2 flex items-center justify-between">
+                                <label class="eyebrow text-ink/60">Skala</label>
+                                <span class="display text-[13px] font-bold tabular-nums text-ink">
+                                    {{ printSettings.scaleFactor }}%
+                                </span>
+                            </div>
+                            <input :value="printSettings.scaleFactor" type="range" min="10" max="100" step="1"
+                                class="range-input w-full" @input="
+                                    (e) =>
+                                        updatePrintSettings({
+                                            scaleFactor: Number(
+                                                (e.target as HTMLInputElement).value
+                                            ),
+                                        })
+                                " />
+                            <div class="mt-1 flex justify-between text-[10.5px] text-ink/40">
+                                <span>10%</span>
+                                <span>50%</span>
+                                <span>100%</span>
+                            </div>
+                        </div>
+
+                        <!-- Reset -->
+                        <div class="flex justify-end border-t-2 border-ink pt-4">
+                            <Button type="button" variant="paper" size="sm" :icon="ArrowPathIcon"
+                                @click="resetPrintSettings">
+                                Reset ke Default
+                            </Button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </Modal>
 </template>
+
+<style scoped>
+/* Range input brutalist */
+.range-input {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 8px;
+    background: #fffdf8;
+    border: 2px solid #20201e;
+    cursor: pointer;
+}
+
+.range-input::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 18px;
+    width: 18px;
+    background: #d9ed93;
+    border: 2px solid #20201e;
+    cursor: grab;
+}
+
+.range-input::-webkit-slider-thumb:active {
+    cursor: grabbing;
+    background: #2945e8;
+}
+
+.range-input::-moz-range-thumb {
+    height: 18px;
+    width: 18px;
+    background: #d9ed93;
+    border: 2px solid #20201e;
+    border-radius: 0;
+    cursor: grab;
+}
+</style>
