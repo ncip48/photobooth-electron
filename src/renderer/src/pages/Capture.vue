@@ -87,9 +87,38 @@ const mmss = computed(() => {
 const isExpired = computed(() => remaining.value <= 0)
 const isLowTime = computed(() => remaining.value <= 10 && remaining.value > 0)
 
-//TODO: set dari default event juga
-const isSetMaxCapture = computed(() => (templateId && totalDropzone.value > 0) || (event?.value?.max_capture && event?.value?.max_capture > 0))
-const isReachMaxCapture = computed(() => isSetMaxCapture && totalCaptures.value === totalDropzone.value)
+const isSetMaxCapture = computed(() => {
+    // Simple event:
+    // limit berasal dari template
+    if (event?.value?.is_simple) {
+        return Boolean(
+            templateId &&
+            totalDropzone.value > 0
+        )
+    }
+
+    // Non-simple event:
+    // limit berasal dari event.max_capture
+    return Boolean(
+        event?.value?.max_capture &&
+        event.value.max_capture > 0
+    )
+})
+
+const maxCapture = computed(() => {
+    if (event?.value?.is_simple) {
+        return totalDropzone.value
+    }
+
+    return event?.value?.max_capture ?? 0
+})
+
+const isReachMaxCapture = computed(() => {
+    return (
+        isSetMaxCapture.value &&
+        totalCaptures.value >= maxCapture.value
+    )
+})
 
 /* =========================================================
    Capture state
