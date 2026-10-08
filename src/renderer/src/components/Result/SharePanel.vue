@@ -21,6 +21,7 @@ const props = withDefaults(
         printed?: boolean
         printMessage?: string
         printError?: string
+        alreadyPrintCount?: number
     }>(),
     {
         emailSending: false,
@@ -34,6 +35,7 @@ const props = withDefaults(
         printed: false,
         printMessage: '',
         printError: '',
+        alreadyPrintCount: 0
     }
 )
 
@@ -97,7 +99,7 @@ function onPrint(qty: number) {
             <div v-else class="min-h-0 flex-1 overflow-y-auto">
                 <PrintTab :unit-price="additionalPricePerStrip" :free-print="maxPrintStrip" :printing="printing"
                     :printed="printed" :print-message="printMessage" :print-error="printError" :loading="loading"
-                    @print="onPrint" />
+                    @print="onPrint" :already-print-count="alreadyPrintCount" />
             </div>
         </div>
     </div>

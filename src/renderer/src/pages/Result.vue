@@ -245,7 +245,7 @@ onBeforeUnmount(() => {
                     :email-sent="emailSent" :email-message="emailMessage" :email-error="emailError" :loading="isLoading"
                     @send-email="onSendEmail" :additional-price-per-strip="event?.additional_price_per_print_strip ?? 0"
                     :max-print-strip="event?.max_print_strip ?? 1" :printing="printing" :print-error="printError"
-                    @print="handlePrint" />
+                    @print="handlePrint" :already-print-count="result?.session?.total_prints" />
 
                 <ResultWarning />
 

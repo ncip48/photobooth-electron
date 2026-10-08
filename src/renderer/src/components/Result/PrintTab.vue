@@ -18,6 +18,7 @@ const props = withDefaults(
         printMessage?: string
         printError?: string
         loading?: boolean
+        alreadyPrintCount?: number
     }>(),
     {
         unitPrice: 0,
@@ -27,6 +28,7 @@ const props = withDefaults(
         printMessage: '',
         printError: '',
         loading: false,
+        alreadyPrintCount: 0,
     }
 )
 
@@ -39,7 +41,15 @@ const qty = ref(1)
 const MIN_QTY = 1
 const MAX_QTY = 10
 
-const billableQty = computed(() => Math.max(qty.value - props.freePrint, 0))
+// const billableQty = computed(() => Math.max(qty.value - props.freePrint, 0))
+
+const remainingFreePrint = computed(() =>
+    Math.max(props.freePrint - props.alreadyPrintCount, 0)
+)
+
+const billableQty = computed(() =>
+    Math.max(qty.value - remainingFreePrint.value, 0)
+)
 
 const total = computed(() => billableQty.value * props.unitPrice)
 
@@ -116,6 +126,11 @@ function submit() {
                             </template>
                         </p>
                     </div>
+
+                    <!-- Sisa free print -->
+                    <p v-if="remainingFreePrint > 0" class="mt-1 text-[10px] font-medium text-ink/40"> Sisa gratis: {{
+                        remainingFreePrint }}
+                        lembar </p>
 
                     <p class="display text-2xl font-bold tabular-nums leading-none text-ink sm:text-3xl">
                         {{ formatRupiah(total) }}

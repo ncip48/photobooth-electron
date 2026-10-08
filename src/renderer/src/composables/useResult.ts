@@ -16,6 +16,7 @@ export interface ResultData {
     session: {
         id: string
         session_number: string | null
+        total_prints: number
     }
     event: PhotoboothEvent
     photostrip: Photostrip | null
