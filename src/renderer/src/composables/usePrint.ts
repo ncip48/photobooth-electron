@@ -113,6 +113,8 @@ export function usePrint() {
     async function printWithDialog(override?: Partial<PrintSettings>) {
         const merged = { ...settings.value, ...override }
 
+        console.log(merged)
+
         try {
             const electron = getElectron()
             const res = await electron.print.openDialog({
@@ -151,6 +153,53 @@ export function usePrint() {
         })
     }
 
+    /* =========================================================
+   Print image (dataURL) — silent
+   ========================================================= */
+    async function printImage(
+        imageDataUrl: string,
+        override?: Partial<PrintSettings> & { copies?: number }
+    ) {
+        if (printing.value) return
+
+        const merged = { ...settings.value, ...override }
+        const copies = override?.copies ?? 1
+
+        printing.value = true
+        error.value = ''
+
+        try {
+            const electron = getElectron()
+
+            // Pastikan dataURL
+            const dataUrl = imageDataUrl.startsWith('data:')
+                ? imageDataUrl
+                : `data:image/jpeg;base64,${imageDataUrl}`
+
+            const res = await electron.print.image({
+                imageDataUrl: dataUrl,
+                printerName: merged.deviceName,
+                copies,
+                marginTop: merged.marginTop,
+                marginBottom: merged.marginBottom,
+                marginLeft: merged.marginLeft,
+                marginRight: merged.marginRight,
+                scaleFactor: merged.scaleFactor,
+            })
+
+            if (!res.success) {
+                throw new Error(res.error ?? 'Print gagal.')
+            }
+
+            return res
+        } catch (err: any) {
+            error.value = err?.message ?? 'Print failed.'
+            throw err
+        } finally {
+            printing.value = false
+        }
+    }
+
     return {
         printers,
         loading,
@@ -159,6 +208,7 @@ export function usePrint() {
         settings,
         loadPrinters,
         print,
+        printImage,
         printWithDialog,
         updateSettings,
         replaceSettings,

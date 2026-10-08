@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PhotostripPreview from '@/components/Result/PhotostripPreview.vue'
 import ThankYouCard from '@/components/Result/ThankYouCard.vue'
@@ -154,14 +154,64 @@ async function onFinish() {
     }
 }
 
-const { print, printing, error: printError } = usePrint()
+/* =========================================================
+   PRINT — berdasarkan photostrip yang sudah jadi
+   ========================================================= */
+const { printImage, printing, error: printError } = usePrint()
 
-// Handler print — panggil composable, kirim qty
+const printMessage = ref('')
+
+/**
+ * Ambil dataURL dari photostrip.
+ * Prioritas:
+ *  1. photostrip.value.image (kalau backend sudah kirim dataURL/base64)
+ *  2. photostrip.value.url (fetch → blob → dataURL)
+ *  3. photostrip.value.path (fallback, tidak dipakai di renderer)
+ */
+async function resolvePhotostripDataUrl(): Promise<string> {
+    if (!photostrip.value) {
+        throw new Error('Photostrip belum siap.')
+    }
+
+    // 1. Langsung dari payload
+    const ps: any = photostrip.value
+    if (ps.image && typeof ps.image === 'string') {
+        if (ps.image.startsWith('data:')) return ps.image
+        // asumsi base64 tanpa prefix
+        return `data:image/jpeg;base64,${ps.image}`
+    }
+
+    // 2. Fetch URL → blob → dataURL
+    if (ps.url) {
+        const res = await fetch(ps.url)
+        if (!res.ok) throw new Error('Gagal mengambil gambar photostrip.')
+        const blob = await res.blob()
+
+        return await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(reader.result as string)
+            reader.onerror = () => reject(new Error('Gagal membaca blob.'))
+            reader.readAsDataURL(blob)
+        })
+    }
+
+    throw new Error('Photostrip tidak punya sumber gambar.')
+}
+
+// Handler print — cetak GAMBAR photostrip, bukan halaman
 async function handlePrint(qty: number) {
+    if (printing.value) return
+    printMessage.value = ''
+
     try {
-        await print({ copies: qty })
-    } catch (e) {
-        // error sudah diset di composable
+        const imageDataUrl = await resolvePhotostripDataUrl()
+
+        await printImage(imageDataUrl, { copies: qty })
+
+        printMessage.value = `Berhasil mengirim ${qty} salinan ke printer.`
+    } catch (err: any) {
+        console.error('[Result] Print failed:', err)
+        // error sudah di-set di composable (printError)
     }
 }
 
@@ -192,7 +242,8 @@ onBeforeUnmount(() => {
                 <SharePanel :qr-url="qrUrl" :public-url="publicUrl" :email-sending="emailSending"
                     :email-sent="emailSent" :email-message="emailMessage" :email-error="emailError" :loading="isLoading"
                     @send-email="onSendEmail" :additional-price-per-strip="event?.additional_price_per_print_strip ?? 0"
-                    :printing="printing" :print-error="printError" @print="handlePrint" />
+                    :max-print-strip="event?.max_print_strip ?? 1" :printing="printing" :print-error="printError"
+                    @print="handlePrint" />
 
                 <ResultWarning />
 

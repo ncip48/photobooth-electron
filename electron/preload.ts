@@ -29,6 +29,7 @@ const api = {
         send: (options: any) => ipcRenderer.invoke('print:send', options),
         openDialog: (options?: any) =>
             ipcRenderer.invoke('print:open-dialog', options),
+        image: (options?: any) => ipcRenderer.invoke('print:image', options),
     },
 
     // Store

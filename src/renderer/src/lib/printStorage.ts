@@ -5,7 +5,7 @@ export interface PrintSettings {
     marginLeft: number
     marginRight: number
     scaleFactor: number    // 0-100
-    pageSize: string       // '4x6' | '5x7' | 'A4' | 'Letter'
+    // pageSize: string       // '4x6' | '5x7' | 'A4' | 'Letter'
 }
 
 const STORAGE_KEY = 'photobooth.printSettings'
@@ -17,7 +17,7 @@ const DEFAULT_SETTINGS: PrintSettings = {
     marginLeft: 2,
     marginRight: 2,
     scaleFactor: 100,
-    pageSize: '4x6',
+    // pageSize: '4x6',
 }
 
 export function loadPrintSettings(): PrintSettings {
@@ -35,7 +35,7 @@ export function loadPrintSettings(): PrintSettings {
             marginLeft: parsed.marginLeft ?? DEFAULT_SETTINGS.marginLeft,
             marginRight: parsed.marginRight ?? DEFAULT_SETTINGS.marginRight,
             scaleFactor: parsed.scaleFactor ?? DEFAULT_SETTINGS.scaleFactor,
-            pageSize: parsed.pageSize ?? DEFAULT_SETTINGS.pageSize,
+            // pageSize: parsed.pageSize ?? DEFAULT_SETTINGS.pageSize,
         }
     } catch {
         return { ...DEFAULT_SETTINGS }

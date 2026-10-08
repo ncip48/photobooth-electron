@@ -124,6 +124,117 @@ export function registerPrintHandlers(ipcMain: IpcMain): void {
         }
     })
 
+    ipcMain.handle('print:image', async (_event, options: {
+        imageDataUrl: string
+        printerName?: string
+        copies?: number
+        marginTop?: number
+        marginBottom?: number
+        marginLeft?: number
+        marginRight?: number
+        scaleFactor?: number
+    }) => {
+        const {
+            imageDataUrl,
+            printerName,
+            copies = 1,
+            marginTop = 0,
+            marginBottom = 0,
+            marginLeft = 0,
+            marginRight = 0,
+            scaleFactor = 100,
+        } = options
+
+        // Window tersembunyi
+        const win = new BrowserWindow({
+            show: false,
+            width: 800,
+            height: 1200,
+            webPreferences: { offscreen: true },
+        })
+
+        const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8" />
+            <style>
+                * { margin: 0; padding: 0; box-sizing: border-box; }
+                html, body {
+                    width: 100%;
+                    height: 100%;
+                    background: white;
+                }
+                body {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+                img {
+                    max-width: 100%;
+                    max-height: 100%;
+                    object-fit: contain;
+                }
+                @page { margin: 0; }
+            </style>
+        </head>
+        <body>
+            <img src="${imageDataUrl}" alt="print" />
+        </body>
+        </html>
+    `
+
+        await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+
+        // Tunggu gambar selesai dimuat
+        await new Promise<void>((resolve) => {
+            win.webContents.executeJavaScript(`
+            new Promise((r) => {
+                const img = document.querySelector('img')
+                if (!img) return r()
+                if (img.complete) return r()
+                img.onload = () => r()
+                img.onerror = () => r()
+            })
+        `).then(() => resolve())
+        })
+
+        // Sedikit delay untuk memastikan render selesai
+        await new Promise((r) => setTimeout(r, 300))
+
+        return new Promise<{ success: boolean; error?: string }>((resolve) => {
+            win.webContents.print(
+                {
+                    silent: !!printerName,
+                    deviceName: printerName,
+                    copies,
+                    color: true,
+                    margins: {
+                        marginType: 'custom',
+                        top: marginTop,
+                        bottom: marginBottom,
+                        left: marginLeft,
+                        right: marginRight,
+                    },
+                    scaleFactor,
+                    printBackground: true,
+                },
+                (success, failureReason) => {
+                    // Tutup window setelah print selesai
+                    setTimeout(() => {
+                        if (!win.isDestroyed()) win.close()
+                    }, 1000)
+
+                    if (success) {
+                        resolve({ success: true })
+                    } else {
+                        resolve({ success: false, error: failureReason })
+                    }
+                }
+            )
+        })
+    })
+
     /* =========================================================
        Open native print dialog (non-silent)
        ========================================================= */

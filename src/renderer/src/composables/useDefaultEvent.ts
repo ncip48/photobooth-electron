@@ -15,6 +15,7 @@ export interface PhotoboothEvent {
     background_url?: string | null
     max_capture?: number
     additional_price_per_print_strip?: number
+    max_print_strip?: number
     [key: string]: any
 }
 
