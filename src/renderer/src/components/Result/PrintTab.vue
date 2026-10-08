@@ -12,6 +12,7 @@ import { formatRupiah } from '@/lib/format'
 const props = withDefaults(
     defineProps<{
         unitPrice?: number
+        freePrint?: number
         printing?: boolean
         printed?: boolean
         printMessage?: string
@@ -20,6 +21,7 @@ const props = withDefaults(
     }>(),
     {
         unitPrice: 0,
+        freePrint: 1,
         printing: false,
         printed: false,
         printMessage: '',
@@ -37,7 +39,9 @@ const qty = ref(1)
 const MIN_QTY = 1
 const MAX_QTY = 10
 
-const total = computed(() => qty.value * (props.unitPrice ?? 0))
+const billableQty = computed(() => Math.max(qty.value - props.freePrint, 0))
+
+const total = computed(() => billableQty.value * props.unitPrice)
 
 function inc() {
     if (qty.value < MAX_QTY) qty.value++
@@ -95,10 +99,24 @@ function submit() {
                 <div class="flex items-center justify-between gap-3 px-4 py-3">
                     <div class="min-w-0">
                         <p class="eyebrow text-ink/50">Total</p>
+
                         <p class="display text-[11px] text-ink/55">
-                            {{ qty }} × {{ formatRupiah(unitPrice) }}
+                            <template v-if="props.freePrint > 0">
+                                {{ qty }} lembar
+                                <span class="text-lime-700">
+                                    ({{ Math.min(qty, props.freePrint) }} gratis)
+                                </span>
+                                <template v-if="billableQty > 0">
+                                    · {{ billableQty }} × {{ formatRupiah(unitPrice) }}
+                                </template>
+                            </template>
+
+                            <template v-else>
+                                {{ qty }} × {{ formatRupiah(unitPrice) }}
+                            </template>
                         </p>
                     </div>
+
                     <p class="display text-2xl font-bold tabular-nums leading-none text-ink sm:text-3xl">
                         {{ formatRupiah(total) }}
                     </p>

@@ -203,6 +203,8 @@ async function handlePrint(qty: number) {
     if (printing.value) return
     printMessage.value = ''
 
+    console.log(qty, "print")
+
     try {
         const imageDataUrl = await resolvePhotostripDataUrl()
 
