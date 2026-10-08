@@ -12,11 +12,13 @@ withDefaults(
         photostrip?: Photostrip | null
         eventTitle?: string
         loading?: boolean
+        eventLoading?: boolean
     }>(),
     {
         photostrip: null,
         eventTitle: '',
         loading: false,
+        eventLoading: false,
     }
 )
 </script>
@@ -34,7 +36,7 @@ withDefaults(
                     <div class="min-w-0">
                         <p class="eyebrow text-ink/50">Hasil Photostrip</p>
                         <p class="display truncate text-[13.5px] font-bold text-ink" :class="loading && 'text-ink/40'">
-                            <template v-if="loading">
+                            <template v-if="eventLoading">
                                 <span class="inline-block h-3.5 w-24 animate-pulse bg-ink/10" />
                             </template>
                             <template v-else>

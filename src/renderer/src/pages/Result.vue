@@ -12,6 +12,7 @@ import {
     useResultCountdown,
 } from '@/composables/useResult'
 import { useActiveEvent } from '@/composables/useEvents'
+import { usePrint } from '@/composables/usePrint'
 
 const route = useRoute()
 const router = useRouter()
@@ -153,6 +154,17 @@ async function onFinish() {
     }
 }
 
+const { print, printing, error: printError } = usePrint()
+
+// Handler print — panggil composable, kirim qty
+async function handlePrint(qty: number) {
+    try {
+        await print({ copies: qty })
+    } catch (e) {
+        // error sudah diset di composable
+    }
+}
+
 /* =========================================================
    Lifecycle
    ========================================================= */
@@ -167,7 +179,8 @@ onBeforeUnmount(() => {
             class="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden p-4 sm:gap-5 sm:p-6 lg:grid-cols-[560px_minmax(0,1fr)] lg:justify-center">
 
             <!-- KIRI: Photostrip -->
-            <PhotostripPreview :photostrip="photostrip" :event-title="event?.title" :loading="isLoading" />
+            <PhotostripPreview :photostrip="photostrip" :event-title="event?.title" :loading="isLoading"
+                :eventLoading="eventLoading" />
 
             <!-- KANAN: Ucapan + Share + Warning + Selesai -->
             <aside class="flex min-h-0 flex-col gap-4">
@@ -178,7 +191,8 @@ onBeforeUnmount(() => {
 
                 <SharePanel :qr-url="qrUrl" :public-url="publicUrl" :email-sending="emailSending"
                     :email-sent="emailSent" :email-message="emailMessage" :email-error="emailError" :loading="isLoading"
-                    @send-email="onSendEmail" />
+                    @send-email="onSendEmail" :additional-price-per-strip="event?.additional_price_per_print_strip ?? 0"
+                    :printing="printing" :print-error="printError" @print="handlePrint" />
 
                 <ResultWarning />
 

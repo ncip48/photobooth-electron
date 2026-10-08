@@ -976,7 +976,7 @@ watch(activeTab, async (tab) => {
                         </div>
 
                         <!-- Paper Size -->
-                        <div>
+                        <!-- <div>
                             <label class="eyebrow mb-2 block text-ink/60">
                                 Ukuran Kertas
                             </label>
@@ -989,7 +989,7 @@ watch(activeTab, async (tab) => {
                                     {{ size.label }}
                                 </button>
                             </div>
-                        </div>
+                        </div> -->
 
                         <!-- Margins -->
                         <div>

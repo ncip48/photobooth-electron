@@ -91,7 +91,7 @@ export function usePrint() {
                 marginLeft: merged.marginLeft,
                 marginRight: merged.marginRight,
                 scaleFactor: merged.scaleFactor,
-                pageSize: merged.pageSize,
+                // pageSize: merged.pageSize,
             })
 
             if (!res.success) {
@@ -122,7 +122,7 @@ export function usePrint() {
                 marginLeft: merged.marginLeft,
                 marginRight: merged.marginRight,
                 scaleFactor: merged.scaleFactor,
-                pageSize: merged.pageSize,
+                // pageSize: merged.pageSize,
             })
 
             if (!res.success) {
@@ -147,7 +147,7 @@ export function usePrint() {
             marginLeft: 2,
             marginRight: 2,
             scaleFactor: 100,
-            pageSize: '4x6',
+            // pageSize: '4x6',
         })
     }
 

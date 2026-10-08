@@ -250,8 +250,8 @@ const submitWithDialog = async () => {
                     <div class="flex flex-wrap gap-2">
                         <button v-for="(size, key) in PAPER_SIZES" :key="key" type="button"
                             class="display border-2 px-3 py-2 text-[12.5px] font-bold transition-colors" :class="settings.pageSize === key
-                                    ? 'border-ink bg-ink text-white'
-                                    : 'border-ink/20 bg-paper-soft text-ink hover:border-ink hover:bg-lime'
+                                ? 'border-ink bg-ink text-white'
+                                : 'border-ink/20 bg-paper-soft text-ink hover:border-ink hover:bg-lime'
                                 " @click="updateSettings({ pageSize: key })">
                             {{ size.label }}
                         </button>

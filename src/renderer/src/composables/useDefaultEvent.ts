@@ -14,6 +14,7 @@ export interface PhotoboothEvent {
     is_simple: boolean
     background_url?: string | null
     max_capture?: number
+    additional_price_per_print_strip?: number
     [key: string]: any
 }
 

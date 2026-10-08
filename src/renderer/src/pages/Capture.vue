@@ -274,11 +274,31 @@ const finishSession = async () => {
     stopTimer()
 
     try {
-        await finishCapture()
-        router.push({
-            name: 'editor',
-            params: { sessionId: sessionId.value },
-        })
+        if (isSimpleMode) {
+            await finishCapture()
+            // =========================================================
+            // AUTO SILENT PRINT (uncomment kalau butuh)
+            // =========================================================
+            //
+            // try {
+            //     await silentPrint({ copies: 1 })
+            //     console.log('[Editor] Auto-print triggered')
+            // } catch (printErr) {
+            //     console.error('[Editor] Auto-print failed:', printErr)
+            // }
+            //
+            // =========================================================
+            router.push({
+                name: 'result',
+                params: { sessionId: sessionId.value },
+            })
+        } else {
+            await finishCapture()
+            router.push({
+                name: 'editor',
+                params: { sessionId: sessionId.value },
+            })
+        }
     } catch (err) {
         // Error sudah di-set
     }
@@ -344,6 +364,7 @@ onBeforeUnmount(() => {
                     :has-pending-uploads="hasPendingUploads" :total-captures="totalCaptures" :disabled-capture="isExpired ||
                         !!reviewingPhoto ||
                         eventLoading ||
+                        galleryLoading ||
                         !event ||
                         isReachMaxCapture
                         " :disabled-finish="eventLoading || !event" @capture="takePicture" @finish="finishSession" />
