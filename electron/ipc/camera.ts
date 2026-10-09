@@ -61,9 +61,25 @@ export function registerCameraHandlers(ipcMain: IpcMain): void {
     ipcMain.handle('camera:get-config', async () => {
         try {
             const config = await cameraService.getConfig()
-            return { success: true, config }
-        } catch (err: any) {
-            return { success: false, error: err?.message }
+
+            return {
+                success: true,
+                config,
+            }
+        } catch (err: unknown) {
+            console.error('[IPC camera:get-config] Failed:', err)
+
+            const error =
+                err instanceof Error
+                    ? err.message
+                    : typeof err === 'string'
+                        ? err
+                        : JSON.stringify(err) || 'Unknown camera error'
+
+            return {
+                success: false,
+                error,
+            }
         }
     })
 
@@ -94,14 +110,23 @@ export function registerCameraHandlers(ipcMain: IpcMain): void {
     /* =========================================================
        Capture full image
        ========================================================= */
+    // ipcMain.handle('camera:capture', async () => {
+    //     try {
+    //         const { base64, buffer } = await cameraService.captureImage()
+    //         return {
+    //             success: true,
+    //             data: base64,
+    //             size: buffer.length,
+    //         }
+    //     } catch (err: any) {
+    //         return { success: false, error: err?.message }
+    //     }
+    // })
+
     ipcMain.handle('camera:capture', async () => {
         try {
-            const { base64, buffer } = await cameraService.captureImage()
-            return {
-                success: true,
-                data: base64,
-                size: buffer.length,
-            }
+            const { base64 } = await cameraService.captureToTempFile()
+            return { success: true, data: base64 }
         } catch (err: any) {
             return { success: false, error: err?.message }
         }

@@ -1,5 +1,14 @@
 import type { IpcMain } from 'electron'
 import { BrowserWindow } from 'electron'
+import { getPrinterCapabilities } from './printer-capabilities'
+
+import { execFile } from 'node:child_process'
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFile)
 
 interface PrintOptions {
     deviceName: string
@@ -19,6 +28,141 @@ interface PrintOptions {
 /* Convert mm → inch (Electron pakai inch untuk margin) */
 const mmToInch = (mm: number): number => mm / 25.4
 
+type ElectronPageSize = string | {
+    width: number
+    height: number
+}
+
+async function resolvePageSize(
+    printerName: string | undefined,
+    pageSize: ElectronPageSize,
+): Promise<ElectronPageSize> {
+    // Ukuran custom yang sudah berupa micron tidak perlu dikonversi.
+    if (typeof pageSize !== 'string') {
+        if (
+            pageSize.width <= 0 ||
+            pageSize.height <= 0
+        ) {
+            throw new Error('Invalid custom page size.')
+        }
+
+        return pageSize
+    }
+
+    if (!printerName) {
+        throw new Error(
+            `Cannot resolve pageSize "${pageSize}" without a printer name.`,
+        )
+    }
+
+    const result = await getPrinterCapabilities(printerName)
+
+    const paper = result.papers.find(
+        (item) => item.id === pageSize,
+    )
+
+    if (!paper) {
+        throw new Error(
+            `Unsupported pageSize: ${pageSize}. ` +
+            `The selected printer does not expose this media ID.`,
+        )
+    }
+
+    if (
+        paper.widthMicrons == null ||
+        paper.heightMicrons == null ||
+        paper.widthMicrons <= 0 ||
+        paper.heightMicrons <= 0
+    ) {
+        throw new Error(
+            `Media "${pageSize}" has no valid dimensions in the printer driver.`,
+        )
+    }
+
+    return {
+        width: paper.widthMicrons,
+        height: paper.heightMicrons,
+    }
+}
+
+interface CupsPrintOptions {
+    imageDataUrl: string
+    printerName: string
+    copies?: number
+    pageSize: string
+    driverOptions?: Record<string, string>
+}
+
+async function printImageWithCups(options: CupsPrintOptions) {
+    const {
+        imageDataUrl,
+        printerName,
+        copies = 1,
+        pageSize,
+        driverOptions = {},
+    } = options
+
+    if (process.platform !== 'darwin') {
+        throw new Error('CUPS printing helper ini khusus macOS.')
+    }
+
+    if (!imageDataUrl.startsWith('data:image/')) {
+        throw new Error('Format gambar harus berupa data URL gambar.')
+    }
+
+    const match = imageDataUrl.match(
+        /^data:image\/(jpeg|jpg|png);base64,([\s\S]+)$/i,
+    )
+
+    if (!match) {
+        throw new Error('Data URL harus berupa JPEG atau PNG base64.')
+    }
+
+    const extension = match[1].toLowerCase() === 'png' ? 'png' : 'jpg'
+    const imageBuffer = Buffer.from(match[2], 'base64')
+    const directory = await mkdtemp(join(tmpdir(), 'photobooth-'))
+    const imagePath = join(directory, `print.${extension}`)
+
+    try {
+        await writeFile(imagePath, imageBuffer)
+
+        const args = [
+            '-d', printerName,
+            '-n', String(Math.max(1, Math.floor(copies))),
+        ]
+
+        // Terapkan ukuran kertas menggunakan ID media CUPS.
+        // pageSize harus merupakan nama media CUPS yang valid.
+        if (!pageSize || !/^[a-zA-Z0-9_.-]+$/.test(pageSize)) {
+            throw new Error('Ukuran kertas tidak valid.')
+        }
+
+        args.push('-o', `media=${pageSize}`)
+
+        // Opsi driver Epson yang dipilih dari modal.
+        for (const [key, value] of Object.entries(driverOptions)) {
+            if (
+                ['EPIJ_Medi', 'EPIJ_Qual', 'EPIJ_Bdls'].includes(key) &&
+                /^[a-zA-Z0-9_.-]+$/.test(value)
+            ) {
+                args.push('-o', `${key}=${value}`)
+            }
+        }
+
+        args.push(imagePath)
+
+        const { stdout, stderr } = await execFileAsync('lp', args)
+
+        return {
+            success: true,
+            message: stdout.trim(),
+            warning: stderr.trim() || undefined,
+        }
+    } finally {
+        await rm(directory, { recursive: true, force: true })
+    }
+}
+
 export function registerPrintHandlers(ipcMain: IpcMain): void {
     /* =========================================================
        List printers
@@ -29,6 +173,8 @@ export function registerPrintHandlers(ipcMain: IpcMain): void {
             if (!win) return { success: false, printers: [] }
 
             const printers = await win.webContents.getPrintersAsync()
+
+            console.log(printers, "FROM IPC")
 
             return {
                 success: true,
@@ -124,115 +270,34 @@ export function registerPrintHandlers(ipcMain: IpcMain): void {
         }
     })
 
-    ipcMain.handle('print:image', async (_event, options: {
-        imageDataUrl: string
-        printerName?: string
-        copies?: number
-        marginTop?: number
-        marginBottom?: number
-        marginLeft?: number
-        marginRight?: number
-        scaleFactor?: number
-    }) => {
-        const {
-            imageDataUrl,
-            printerName,
-            copies = 1,
-            marginTop = 0,
-            marginBottom = 0,
-            marginLeft = 0,
-            marginRight = 0,
-            scaleFactor = 100,
-        } = options
-
-        // Window tersembunyi
-        const win = new BrowserWindow({
-            show: false,
-            width: 800,
-            height: 1200,
-            webPreferences: { offscreen: true },
-        })
-
-        const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8" />
-            <style>
-                * { margin: 0; padding: 0; box-sizing: border-box; }
-                html, body {
-                    width: 100%;
-                    height: 100%;
-                    background: white;
+    ipcMain.handle('print:image', async (_event, options) => {
+        try {
+            if (process.platform === 'darwin') {
+                if (!options.printerName) {
+                    throw new Error('Printer belum dipilih.')
                 }
-                body {
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                }
-                img {
-                    max-width: 100%;
-                    max-height: 100%;
-                    object-fit: contain;
-                }
-                @page { margin: 0; }
-            </style>
-        </head>
-        <body>
-            <img src="${imageDataUrl}" alt="print" />
-        </body>
-        </html>
-    `
 
-        await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+                return await printImageWithCups({
+                    imageDataUrl: options.imageDataUrl,
+                    printerName: options.printerName,
+                    copies: options.copies ?? 1,
+                    driverOptions: options.driverOptions ?? {},
+                    pageSize: options.pageSize,
+                })
+            }
 
-        // Tunggu gambar selesai dimuat
-        await new Promise<void>((resolve) => {
-            win.webContents.executeJavaScript(`
-            new Promise((r) => {
-                const img = document.querySelector('img')
-                if (!img) return r()
-                if (img.complete) return r()
-                img.onload = () => r()
-                img.onerror = () => r()
-            })
-        `).then(() => resolve())
-        })
-
-        // Sedikit delay untuk memastikan render selesai
-        await new Promise((r) => setTimeout(r, 300))
-
-        return new Promise<{ success: boolean; error?: string }>((resolve) => {
-            win.webContents.print(
-                {
-                    silent: !!printerName,
-                    deviceName: printerName,
-                    copies,
-                    color: true,
-                    margins: {
-                        marginType: 'custom',
-                        top: marginTop,
-                        bottom: marginBottom,
-                        left: marginLeft,
-                        right: marginRight,
-                    },
-                    scaleFactor,
-                    printBackground: true,
-                },
-                (success, failureReason) => {
-                    // Tutup window setelah print selesai
-                    setTimeout(() => {
-                        if (!win.isDestroyed()) win.close()
-                    }, 1000)
-
-                    if (success) {
-                        resolve({ success: true })
-                    } else {
-                        resolve({ success: false, error: failureReason })
-                    }
-                }
-            )
-        })
+            // Jalur Windows/Linux yang sudah kamu gunakan
+            // tetap dipertahankan di sini.
+            return {
+                success: false,
+                error: 'Jalur cetak untuk platform ini belum diimplementasikan.',
+            }
+        } catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : 'Print gagal.',
+            }
+        }
     })
 
     /* =========================================================
@@ -282,4 +347,30 @@ export function registerPrintHandlers(ipcMain: IpcMain): void {
             }
         }
     )
+
+
+    ipcMain.handle(
+        'print:capabilities',
+        async (_event, printerName: string) => {
+            try {
+                const capabilities =
+                    await getPrinterCapabilities(printerName)
+
+                return {
+                    success: true,
+                    capabilities,
+                }
+            } catch (error: unknown) {
+                return {
+                    success: false,
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : 'Failed to read printer capabilities.',
+                    capabilities: null,
+                }
+            }
+        },
+    )
+
 }

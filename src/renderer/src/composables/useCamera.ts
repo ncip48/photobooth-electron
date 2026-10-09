@@ -54,6 +54,8 @@ export function useCamera() {
             const electron = getElectron()
             const res = await electron.camera.list()
 
+            console.log(res, "cam")
+
             if (res.success) {
                 cameras.value = (res.cameras ?? []).map((c: any) => ({
                     model: c.model,
@@ -86,31 +88,37 @@ export function useCamera() {
             const electron = getElectron()
             const res = await electron.camera.connect(index)
 
-            if (res.success) {
+            if (res?.success) {
                 connected.value = true
                 connectedModel.value = res.model ?? null
 
-                // Save selected camera ID
                 const cam = cameras.value[index]
                 if (cam?.id) {
                     selectedCameraId.value = cam.id
                     saveSelectedCameraId(cam.id)
+                } else if (res.model) {
+                    // fallback: simpan by model kalau index belum ada di cameras
+                    selectedCameraId.value = res.model
+                    saveSelectedCameraId(res.model)
                 }
 
                 return res
-            } else {
-                error.value = res.error ?? 'Gagal terhubung ke kamera.'
-                connected.value = false
-                return null
             }
+
+            error.value = res?.error ?? 'Gagal terhubung ke kamera.'
+            connected.value = false
+            connectedModel.value = null
+            return null
         } catch (err: any) {
             error.value = err?.message ?? 'Failed to connect camera.'
             connected.value = false
+            connectedModel.value = null
             return null
         } finally {
             connecting.value = false
         }
     }
+
 
     /* =========================================================
        Connect by camera ID (untuk auto-connect)
@@ -141,18 +149,23 @@ export function useCamera() {
        Disconnect
        ========================================================= */
     async function disconnect() {
-        stopPreview()
+        await stopPreview()          // <-- WAJIB await sekarang (sudah async)
+
+        if (refreshPromise) {
+            try { await refreshPromise } catch { /* ignore */ }
+        }
 
         try {
             const electron = getElectron()
-            await electron.camera.disconnect()
-        } catch {
-            // ignore
+            const res = await electron.camera.disconnect()
+            if (!res.success) {
+                throw new Error(res.error ?? 'Gagal memutus koneksi kamera.')
+            }
+        } finally {
+            connected.value = false
+            connectedModel.value = null
+            livePreviewUrl.value = null
         }
-
-        connected.value = false
-        connectedModel.value = null
-        livePreviewUrl.value = null
     }
 
     /* =========================================================
@@ -163,11 +176,9 @@ export function useCamera() {
         previewInterval = setInterval(refreshPreview, 500)
     }
 
-    function stopPreview() {
-        if (previewInterval) {
-            clearInterval(previewInterval)
-            previewInterval = null
-        }
+    async function stopPreview() {
+        if (previewInterval) { clearInterval(previewInterval); previewInterval = null }
+        if (refreshPromise) { try { await refreshPromise } catch { } }
         if (livePreviewUrl.value) {
             URL.revokeObjectURL(livePreviewUrl.value)
             livePreviewUrl.value = null
@@ -175,20 +186,33 @@ export function useCamera() {
     }
 
     let refreshing = false
+    let refreshPromise: Promise<void> | null = null
     async function refreshPreview() {
         if (refreshing || !connected.value) return
+
         refreshing = true
 
-        try {
+        const operation = (async () => {
             const electron = getElectron()
             const res = await electron.camera.preview()
-            if (res.success && res.data) {
+
+            if (res.success && res.data && connected.value) {
                 livePreviewUrl.value = res.data
             }
+        })()
+
+        refreshPromise = operation
+
+        try {
+            await operation
         } catch {
-            // silent
+            // Preview dapat gagal saat kamera sedang berhenti.
         } finally {
             refreshing = false
+
+            if (refreshPromise === operation) {
+                refreshPromise = null
+            }
         }
     }
 
@@ -215,6 +239,7 @@ export function useCamera() {
     async function getConfig() {
         const electron = getElectron()
         const res = await electron.camera.getConfig()
+        console.log(res, "res config")
         if (!res.success) throw new Error(res.error ?? 'Failed to get config.')
         return res.config
     }

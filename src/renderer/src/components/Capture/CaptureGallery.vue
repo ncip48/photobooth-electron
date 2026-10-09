@@ -7,7 +7,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import type { CaptureItem } from '@/composables/useCaptures'
 
-withDefaults(
+const props = withDefaults(
     defineProps<{
         gallery: CaptureItem[]
         totalCaptures: number
@@ -93,10 +93,11 @@ const emit = defineEmits<{
             <div v-else class="space-y-3">
                 <div v-for="(item, idx) in gallery" :key="item.id ?? idx"
                     class="group relative overflow-hidden border-2 border-ink bg-paper-soft">
-                    <img :src="item.url" :alt="item.filename" class="block w-full object-cover" :class="[
-                        item.uploading && 'opacity-70',
-                        item.failed && 'grayscale',
-                    ]" />
+                    <img :src="item.thumbnail_url || item.url" :alt="item.filename" class="block w-full object-cover"
+                        :class="[
+                            item.uploading && 'opacity-70',
+                            item.failed && 'grayscale',
+                        ]" />
 
                     <div
                         class="display absolute left-2 top-2 grid h-7 w-7 place-items-center border-2 border-ink bg-lime text-[11px] font-bold text-ink">

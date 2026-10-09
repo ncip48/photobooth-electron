@@ -30,6 +30,9 @@ const api = {
         openDialog: (options?: any) =>
             ipcRenderer.invoke('print:open-dialog', options),
         image: (options?: any) => ipcRenderer.invoke('print:image', options),
+        getPrinterCapabilities: (printerName: string) =>
+            ipcRenderer.invoke('print:capabilities', printerName),
+
     },
 
     // Store

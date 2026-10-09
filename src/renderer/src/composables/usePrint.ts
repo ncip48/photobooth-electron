@@ -47,6 +47,8 @@ export function usePrint() {
             const electron = getElectron()
             const res = await electron.print.list()
 
+            console.log(res, "res print")
+
             if (res.success) {
                 printers.value = res.printers ?? []
 
@@ -91,7 +93,7 @@ export function usePrint() {
                 marginLeft: merged.marginLeft,
                 marginRight: merged.marginRight,
                 scaleFactor: merged.scaleFactor,
-                // pageSize: merged.pageSize,
+                pageSize: merged.pageSize,
             })
 
             if (!res.success) {
@@ -124,7 +126,7 @@ export function usePrint() {
                 marginLeft: merged.marginLeft,
                 marginRight: merged.marginRight,
                 scaleFactor: merged.scaleFactor,
-                // pageSize: merged.pageSize,
+                pageSize: merged.pageSize,
             })
 
             if (!res.success) {
@@ -149,7 +151,7 @@ export function usePrint() {
             marginLeft: 2,
             marginRight: 2,
             scaleFactor: 100,
-            // pageSize: '4x6',
+            pageSize: '4x6',
         })
     }
 
@@ -168,6 +170,9 @@ export function usePrint() {
         printing.value = true
         error.value = ''
 
+        // console.log(merged.driverOptions)
+        // return
+
         try {
             const electron = getElectron()
 
@@ -175,6 +180,13 @@ export function usePrint() {
             const dataUrl = imageDataUrl.startsWith('data:')
                 ? imageDataUrl
                 : `data:image/jpeg;base64,${imageDataUrl}`
+
+            const driverOptions = Object.fromEntries(
+                Object.entries(merged.driverOptions ?? {}).map(([key, value]) => [
+                    String(key),
+                    String(value),
+                ]),
+            )
 
             const res = await electron.print.image({
                 imageDataUrl: dataUrl,
@@ -185,6 +197,8 @@ export function usePrint() {
                 marginLeft: merged.marginLeft,
                 marginRight: merged.marginRight,
                 scaleFactor: merged.scaleFactor,
+                pageSize: merged.pageSize,
+                driverOptions: driverOptions,
             })
 
             if (!res.success) {

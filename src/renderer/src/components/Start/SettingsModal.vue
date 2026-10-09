@@ -190,7 +190,6 @@ const {
     detect,
     connect,
     connectById,
-    autoConnect,
     disconnect,
     capture: capturePhoto,
     getConfig: getCameraConfig,
@@ -198,103 +197,126 @@ const {
     startPreview,
     stopPreview,
     selectedCameraId,
+    forgetSelectedCamera
 } = useCamera()
 
 /* =========================================================
    Camera config tree
    ========================================================= */
 const cameraConfig = ref<any>(null)
+const loadingCameraConfig = ref(false)
+
+let cameraRequestId = 0
+let closing = false
+let cameraChangeInProgress = false
 
 /* =========================================================
    Auto-detect + auto-connect saat modal dibuka ke tab camera
    ========================================================= */
+let initInFlight = false
+
 watch(
-    () => [props.show, activeTab.value],
-    async ([show, tab]) => {
-        if (!show || tab !== 'camera') return
-
-        // 1. Detect cameras
-        await detect()
-
-        // 2. Auto-connect ke camera terakhir (kalau ada di localStorage)
-        if (!connected.value && cameras.value.length > 0) {
-            const savedId = selectedCameraId.value
-            if (savedId) {
-                await connectById(savedId)
-            } else if (cameras.value.length > 0) {
-                // Kalau belum ada, connect ke yang pertama
-                await connect(0)
-            }
+    () => [props.show, activeTab.value] as const,
+    async ([show, tab], [wasShow, wasTab]) => {
+        if (!show || tab !== 'camera') {
+            cameraRequestId++
+            await stopPreview()
+            return
         }
 
-        // 3. Load config tree kalau connected
-        if (connected.value) {
+        // inisialisasi hanya saat transisi masuk ke tab/modal camera
+        if ((!wasShow || wasTab !== 'camera') && !initInFlight) {
+            initInFlight = true
             try {
-                cameraConfig.value = await getCameraConfig()
-            } catch (err) {
-                console.error('Failed to load camera config:', err)
+                await initializeCamera()
+            } finally {
+                initInFlight = false
             }
-        }
-
-        // 4. Start preview
-        if (connected.value) {
-            startPreview()
         }
     },
-    { immediate: false }
+    { immediate: true }
 )
 
 /* =========================================================
    Handle camera dropdown change
    ========================================================= */
 const handleCameraChange = async (cameraId: string) => {
-    // Disconnect dulu kalau ada yang connected
-    if (connected.value) {
-        await disconnect()
+    if (!cameraId || closing || cameraChangeInProgress) return
+    if (cameraId === selectedCameraId.value && connected.value) return
+
+    cameraChangeInProgress = true
+    cameraRequestId++
+    const requestId = cameraRequestId
+
+    try {
+        await stopPreview()
         cameraConfig.value = null
-    }
 
-    // Connect ke camera baru
-    await connectById(cameraId)
+        // Disconnect dulu KALAU ada kamera aktif (BUKAN "if connected.value")
+        // — `connected.value` bisa stale kalau preview sudah di-stop.
+        await disconnect()
 
-    // Load config tree
-    if (connected.value) {
-        try {
-            cameraConfig.value = await getCameraConfig()
-            startPreview()
-        } catch (err) {
-            console.error('Failed to load camera config:', err)
+        if (closing || !props.show || requestId !== cameraRequestId) return
+
+        const idx = cameras.value.findIndex((c) => c.id === cameraId)
+        if (idx < 0) {
+            error.value = `Camera ${cameraId} tidak ditemukan.`
+            return
         }
+
+        await connect(idx)
+        if (closing || !props.show || !connected.value) return
+
+        await loadCameraConfig()
+        if (!closing && props.show && connected.value) startPreview()
+    } catch (err) {
+        console.error('Gagal mengganti kamera:', err)
+        error.value = (err as Error)?.message ?? 'Gagal mengganti kamera.'
+    } finally {
+        cameraChangeInProgress = false
     }
 }
+
 
 /* =========================================================
    Config keys yang ditampilkan (dari camera)
    ========================================================= */
-const CAMERA_CONFIG_KEYS = [
-    { key: 'iso', label: 'ISO' },
-    { key: 'aperture', label: 'Aperture' },
+interface ConfigNode {
+    key: string
+    label: string
+    current: string | number | null
+    choices: string[]
+    writable: boolean
+}
+
+interface CameraConfigDefinition {
+    key: string
+    label: string
+    path: string[]
+}
+
+const CAMERA_CONFIG_KEYS: CameraConfigDefinition[] = [
     {
-        key: 'shutter-speed',
+        key: 'aperture',
+        label: 'Aperture',
+        path: ['main', 'children', 'capturesettings', 'children', 'aperture'],
+    },
+    {
+        key: 'shutterspeed',
         label: 'Shutter Speed',
-        aliases: ['shutterspeed', 'shutter_speed'],
+        path: ['main', 'children', 'capturesettings', 'children', 'shutterspeed'],
+    },
+    {
+        key: 'iso',
+        label: 'ISO',
+        path: ['main', 'children', 'imgsettings', 'children', 'iso'],
     },
     {
         key: 'whitebalance',
         label: 'White Balance',
-        aliases: ['white-balance', 'white_balance'],
+        path: ['main', 'children', 'imgsettings', 'children', 'whitebalance'],
     },
-    {
-        key: 'capturemode',
-        label: 'Capture Mode',
-        aliases: ['capture-mode', 'capture_mode'],
-    },
-    {
-        key: 'imageformat',
-        label: 'Image Format',
-        aliases: ['image-format', 'image_format', 'imagequality'],
-    },
-] as const
+]
 
 interface ConfigNode {
     key: string
@@ -304,44 +326,42 @@ interface ConfigNode {
     writable: boolean
 }
 
-function findConfigNode(config: any, keys: readonly string[]): any {
-    if (!config) return null
-    for (const k of keys) {
-        if (config[k]) return config[k]
-    }
-    return null
+function getConfigByPath(config: any, path: string[]): any {
+    return path.reduce((current, segment) => {
+        if (current == null) return undefined
+        return current[segment]
+    }, config)
 }
 
 const availableConfigs = computed<ConfigNode[]>(() => {
-    if (!cameraConfig.value) return []
+    const config = cameraConfig.value
 
-    const result: ConfigNode[] = []
+    if (!config) return []
 
-    CAMERA_CONFIG_KEYS.forEach((def) => {
-        const keys = [def.key, ...((def as any).aliases ?? [])]
-        const node = findConfigNode(cameraConfig.value, keys)
+    return CAMERA_CONFIG_KEYS.flatMap((definition) => {
+        const node = getConfigByPath(config, definition.path)
 
-        if (!node) return
+        if (!node) return []
 
-        let choices: string[] = []
-        if (Array.isArray(node.choices)) {
-            choices = node.choices.map(String)
-        } else if (Array.isArray(node.choices?.values)) {
-            choices = node.choices.values.map(String)
-        } else if (Array.isArray(node.values)) {
-            choices = node.values.map(String)
-        }
+        const rawChoices =
+            Array.isArray(node.choices)
+                ? node.choices
+                : Array.isArray(node.choices?.values)
+                    ? node.choices.values
+                    : Array.isArray(node.values)
+                        ? node.values
+                        : []
 
-        result.push({
-            key: def.key,
-            label: def.label,
-            current: node.current ?? node.value ?? null,
-            choices,
-            writable: node.readonly !== true,
-        })
+        return [
+            {
+                key: definition.key,
+                label: definition.label,
+                current: node.value ?? node.current ?? null,
+                choices: rawChoices.map(String),
+                writable: node.readonly !== true,
+            },
+        ]
     })
-
-    return result
 })
 
 /* =========================================================
@@ -404,13 +424,15 @@ const testCapture = async () => {
 /* =========================================================
    Update config (dropdown onchange)
    ========================================================= */
-const updateCameraConfig = async (key: string, value: string) => {
-    if (!connected.value || !value) return
+const updateCameraConfig = async (
+    key: string,
+    value: string,
+) => {
+    if (!connected.value || !value || closing) return
 
     try {
         await setConfigValue(key, String(value))
-        // Refresh config tree
-        cameraConfig.value = await getCameraConfig()
+        await loadCameraConfig()
     } catch (err) {
         console.error(`Failed to set ${key}:`, err)
     }
@@ -419,14 +441,14 @@ const updateCameraConfig = async (key: string, value: string) => {
 /* =========================================================
    Lifecycle
    ========================================================= */
-watch(
-    () => props.show,
-    (open) => {
-        if (!open) {
-            stopPreview()
-        }
-    }
-)
+// watch(
+//     () => props.show,
+//     (open) => {
+//         if (!open) {
+//             stopPreview()
+//         }
+//     }
+// )
 
 onBeforeUnmount(() => {
     stopPreview()
@@ -436,16 +458,16 @@ onBeforeUnmount(() => {
 /* =========================================================
    Lifecycle — pause preview kalau modal ditutup
    ========================================================= */
-watch(
-    () => props.show,
-    (open) => {
-        if (!open) {
-            stopPreview()
-        } else if (connected.value) {
-            startPreview()
-        }
-    }
-)
+// watch(
+//     () => props.show,
+//     (open) => {
+//         if (!open) {
+//             stopPreview()
+//         } else if (connected.value) {
+//             startPreview()
+//         }
+//     }
+// )
 
 const { setDefaultEvent } = useActiveEvent()
 
@@ -468,15 +490,200 @@ const {
 } = usePrint()
 
 /* Paper sizes (mm) untuk preview */
-const PAPER_SIZES: Record<string, { width: number; height: number; label: string }> = {
+interface DetectedPaper {
+    id: string
+    name: string
+    widthMicrons: number | null
+    heightMicrons: number | null
+    source: 'driver'
+}
+
+interface DriverOptionChoice {
+    value: string
+    label: string
+}
+
+interface DriverOption {
+    id: string
+    label: string
+    choices: DriverOptionChoice[]
+    defaultValue?: string
+}
+
+interface DetectedPrinterCapabilities {
+    printerName: string
+    platform: string
+    source: 'windows-driver' | 'cups-driver'
+    papers: DetectedPaper[]
+    options?: DriverOption[]
+    warning?: string
+}
+
+const PAPER_SIZES: Record<
+    string,
+    { width: number; height: number; label: string }
+> = {
     '4x6': { width: 101.6, height: 152.4, label: '4×6 inci' },
     '5x7': { width: 127, height: 177.8, label: '5×7 inci' },
     A4: { width: 210, height: 297, label: 'A4' },
     Letter: { width: 215.9, height: 279.4, label: 'Letter' },
 }
 
-const currentPaper = computed(
-    () => PAPER_SIZES[printSettings.value.pageSize] ?? PAPER_SIZES['4x6']
+const detectedPapers = ref<DetectedPaper[]>([])
+const capabilitiesLoading = ref(false)
+const capabilitiesError = ref('')
+const capabilitiesWarning = ref('')
+const capabilityRequestId = ref(0)
+
+const detectedPaperOptions = computed(() =>
+    detectedPapers.value.filter(
+        (paper) =>
+            paper.widthMicrons !== null &&
+            paper.heightMicrons !== null &&
+            paper.widthMicrons > 0 &&
+            paper.heightMicrons > 0,
+    ),
+)
+
+const detectedDriverOptions = ref<DriverOption[]>([])
+
+const driverOptionIds = {
+    media: 'EPIJ_Medi',
+    quality: 'EPIJ_Qual',
+    borderless: 'EPIJ_Bdls',
+} as const
+
+const getDriverOption = (id: string) =>
+    computed(() =>
+        detectedDriverOptions.value.find(
+            (option) => option.id === id,
+        ),
+    )
+
+const mediaOption = getDriverOption(driverOptionIds.media)
+const qualityOption = getDriverOption(driverOptionIds.quality)
+const borderlessOption = getDriverOption(driverOptionIds.borderless)
+
+function updateDriverOption(id: string, value: string) {
+    const option = detectedDriverOptions.value.find(
+        (item) => item.id === id,
+    )
+
+    if (!option?.choices.some((choice) => choice.value === value)) {
+        return
+    }
+
+    updatePrintSettings({
+        driverOptions: {
+            ...(printSettings.value.driverOptions ?? {}),
+            [id]: value,
+        },
+    })
+}
+
+const availablePaperOptions = computed(() => {
+    const options: Record<
+        string,
+        { width: number; height: number; label: string }
+    > = { ...PAPER_SIZES }
+
+    for (const paper of detectedPaperOptions.value) {
+        options[paper.id] = {
+            width: paper.widthMicrons! / 1000,
+            height: paper.heightMicrons! / 1000,
+            label: `${paper.name} (${(
+                paper.widthMicrons! / 1000
+            ).toFixed(1)} × ${(
+                paper.heightMicrons! / 1000
+            ).toFixed(1)} mm)`,
+        }
+    }
+
+    return options
+})
+
+const currentPaper = computed(() => {
+    const detected = detectedPaperOptions.value.find(
+        (paper) => paper.id === printSettings.value.pageSize,
+    )
+
+    if (detected) {
+        return {
+            width: detected.widthMicrons! / 1000,
+            height: detected.heightMicrons! / 1000,
+            label: detected.name,
+        }
+    }
+
+    return (
+        PAPER_SIZES[printSettings.value.pageSize] ??
+        PAPER_SIZES['4x6']
+    )
+})
+
+async function loadPrinterCapabilities(printerName: string) {
+    const requestId = ++capabilityRequestId.value
+
+    detectedPapers.value = []
+    detectedDriverOptions.value = []
+    capabilitiesError.value = ''
+    capabilitiesWarning.value = ''
+
+    if (!printerName) {
+        capabilitiesLoading.value = false
+        return
+    }
+
+    capabilitiesLoading.value = true
+
+    try {
+        const result = await window.electron.print.getPrinterCapabilities(
+            printerName,
+        ) as {
+            success: boolean
+            capabilities: DetectedPrinterCapabilities | null
+            error?: string
+        }
+
+        if (requestId !== capabilityRequestId.value) return
+
+        console.log("DAMN BRO", result)
+
+        if (!result.success || !result.capabilities) {
+            throw new Error(
+                result.error ?? 'Gagal membaca ukuran kertas dari driver.',
+            )
+        }
+
+        detectedPapers.value = result.capabilities.papers
+        detectedDriverOptions.value =
+            result.capabilities.options ?? []
+        capabilitiesWarning.value =
+            result.capabilities.warning ?? ''
+    } catch (err) {
+        if (requestId !== capabilityRequestId.value) return
+
+        capabilitiesError.value =
+            err instanceof Error
+                ? err.message
+                : 'Gagal membaca kemampuan printer.'
+    } finally {
+        if (requestId === capabilityRequestId.value) {
+            capabilitiesLoading.value = false
+        }
+    }
+}
+
+function selectPaper(paperId: string) {
+    updatePrintSettings({ pageSize: paperId })
+}
+
+watch(
+    () => printSettings.value.deviceName,
+    (printerName) => {
+        void loadPrinterCapabilities(printerName)
+    },
+    { immediate: true },
 )
 
 /* ============ Preview dimensions ============ */
@@ -518,14 +725,126 @@ watch(activeTab, async (tab) => {
     }
 })
 
-// onBeforeUnmount(() => {
+
+async function loadCameraConfig() {
+    if (closing || !props.show || !connected.value) return
+
+    const requestId = ++cameraRequestId
+    loadingCameraConfig.value = true
+
+    try {
+        const config = await getCameraConfig()
+
+        if (
+            closing ||
+            !props.show ||
+            requestId !== cameraRequestId
+        ) {
+            return
+        }
+
+        cameraConfig.value = config
+    } catch (err) {
+        if (closing || requestId !== cameraRequestId) return
+
+        cameraConfig.value = null
+        console.error('Failed to load camera config:', err)
+    } finally {
+        if (requestId === cameraRequestId) {
+            loadingCameraConfig.value = false
+        }
+    }
+}
+
+async function initializeCamera() {
+    if (closing || !props.show || activeTab.value !== 'camera' || cameraChangeInProgress) return
+
+    try {
+        if (!connected.value) {
+            await detect()
+            if (!props.show || activeTab.value !== 'camera') return
+            if (cameras.value.length === 0) return
+
+            const savedId = selectedCameraId.value
+            const hasSaved = !!savedId && cameras.value.some(c => c.id === savedId)
+
+            if (hasSaved) {
+                await connectById(savedId!)
+            } else {
+                if (savedId) forgetSelectedCamera()
+                await connect(0)
+            }
+        }
+
+        // Cek sekali lagi SETELAH semua await
+        if (closing || !props.show || activeTab.value !== 'camera') return
+        if (!connected.value) return
+
+        await loadCameraConfig()
+
+        if (!closing && props.show && activeTab.value === 'camera' && connected.value) {
+            startPreview()
+        }
+    } catch (err) {
+        console.error('Gagal menginisialisasi kamera:', err)
+    }
+}
+
+
+// set closing true saat modal mau ditutup
+const handleClose = () => {
+    if (closing) return
+    closing = true
+    cameraRequestId++
+    stopPreview()
+    stopTestOverlay()
+    cameraConfig.value = null
+    emit('close')
+}
+
+// reset closing saat modal dibuka lagi
+watch(
+    () => props.show,
+    (open) => {
+        if (open) {
+            closing = false
+            return
+        }
+        cameraRequestId++
+        stopPreview()
+        stopTestOverlay()
+        cameraConfig.value = null
+    }
+)
+
+// const handleClose = () => {
 //     stopPreview()
-// })
+//     stopTestOverlay()
+//     cameraConfig.value = null
+
+//     emit('close')
+// }
+
+onBeforeUnmount(() => {
+    cameraRequestId++
+    stopPreview()
+    stopTestOverlay()
+
+    // Fallback jika komponen dilepas tanpa melalui handleClose().
+    // if (connected.value) {
+    //     void disconnect().catch((err) => {
+    //         console.error(
+    //             'Gagal disconnect kamera saat unmount:',
+    //             err,
+    //         )
+    //     })
+    // }
+})
 </script>
 
 <template>
     <Modal :show="show" title="Pengaturan Kiosk" subtitle="Konfigurasi umum, kamera, dan cetak" max-width="4xl"
-        :closeable="true" @close="emit('close')">
+        :closeable="true" @close="handleClose">
         <!-- ============================================================
              TABS
              ============================================================ -->
@@ -804,7 +1123,6 @@ watch(activeTab, async (tab) => {
                                 <option value="" disabled>Pilih kamera</option>
                                 <option v-for="cam in cameras" :key="cam.id" :value="cam.id">
                                     {{ cam.model }}
-                                    <span v-if="cam.port"> — {{ cam.port }}</span>
                                 </option>
                             </select>
                             <p v-if="connecting" class="mt-1.5 text-[11.5px] text-ink/55">
@@ -975,21 +1293,146 @@ watch(activeTab, async (tab) => {
                             </button>
                         </div>
 
-                        <!-- Paper Size -->
-                        <!-- <div>
-                            <label class="eyebrow mb-2 block text-ink/60">
-                                Ukuran Kertas
-                            </label>
-                            <div class="flex flex-wrap gap-2">
-                                <button v-for="(size, key) in PAPER_SIZES" :key="key" type="button"
-                                    class="display border-2 px-3 py-2 text-[12.5px] font-bold transition-colors" :class="printSettings.pageSize === key
-                                        ? 'border-ink bg-ink text-white'
-                                        : 'border-ink/20 bg-paper-soft text-ink hover:border-ink hover:bg-lime'
-                                        " @click="updatePrintSettings({ pageSize: key })">
-                                    {{ size.label }}
+
+                        <!-- Paper Size: berdasarkan kemampuan driver -->
+                        <div>
+                            <div class="mb-2 flex items-center justify-between gap-2">
+                                <label class="eyebrow text-ink/60">
+                                    Ukuran Kertas
+                                </label>
+
+                                <button type="button"
+                                    class="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-blue hover:underline disabled:opacity-50"
+                                    :disabled="capabilitiesLoading || !printSettings.deviceName"
+                                    @click="loadPrinterCapabilities(printSettings.deviceName)">
+                                    <ArrowPathIcon class="h-3 w-3" :class="capabilitiesLoading && 'animate-spin'" />
+                                    {{ capabilitiesLoading ? 'Membaca...' : 'Deteksi ulang' }}
                                 </button>
                             </div>
-                        </div> -->
+
+                            <div v-if="capabilitiesLoading"
+                                class="border-2 border-ink/20 bg-paper-soft p-3 text-[12px] text-ink/60">
+                                Membaca ukuran kertas dari driver printer...
+                            </div>
+
+                            <div v-else-if="capabilitiesError"
+                                class="border-2 border-ink bg-rose p-3 text-[12px] leading-5 text-ink">
+                                {{ capabilitiesError }}
+                            </div>
+
+                            <div v-else-if="!printSettings.deviceName"
+                                class="border-2 border-ink/20 bg-paper-soft p-3 text-[12px] text-ink/60">
+                                Pilih printer terlebih dahulu.
+                            </div>
+
+                            <div v-else-if="detectedPaperOptions.length === 0"
+                                class="border-2 border-ink bg-amber p-3 text-[12px] leading-5 text-ink">
+                                Driver tidak memberikan ukuran kertas dengan dimensi yang dapat
+                                dikenali. Ukuran standar di bawah bukan hasil deteksi driver.
+                            </div>
+
+                            <div v-else class="flex flex-wrap gap-2">
+                                <button v-for="paper in detectedPaperOptions" :key="paper.id" type="button"
+                                    class="display border-2 px-3 py-2 text-[12.5px] font-bold transition-colors" :class="printSettings.pageSize === paper.id
+                                        ? 'border-ink bg-ink text-white'
+                                        : 'border-ink/20 bg-paper-soft text-ink hover:border-ink hover:bg-lime'
+                                        " @click="selectPaper(paper.id)">
+                                    {{ paper.name }}
+                                    <span class="ml-1 text-[10px] font-normal">
+                                        {{ (paper.widthMicrons! / 1000).toFixed(1) }} ×
+                                        {{ (paper.heightMicrons! / 1000).toFixed(1) }} mm
+                                    </span>
+                                </button>
+                            </div>
+
+                            <!-- Media Type dari driver -->
+                            <div class="space-y-2">
+                                <label class="eyebrow block text-ink/60">
+                                    Jenis Kertas
+                                </label>
+
+                                <select v-if="mediaOption" :value="printSettings.driverOptions?.EPIJ_Medi ??
+                                    mediaOption.defaultValue ??
+                                    ''
+                                    " class="w-full border-2 border-ink bg-paper-soft px-3 py-2.5 text-[13px] text-ink focus:border-blue focus:outline-none"
+                                    @change="
+                                        updateDriverOption(
+                                            'EPIJ_Medi',
+                                            ($event.target as HTMLSelectElement).value
+                                        )
+                                        ">
+                                    <option v-for="choice in mediaOption.choices" :key="choice.value"
+                                        :value="choice.value">
+                                        {{ choice.label }}
+                                    </option>
+                                </select>
+
+                                <p v-else class="text-[12px] text-ink/50">
+                                    Opsi jenis kertas tidak tersedia dari driver.
+                                </p>
+                            </div>
+
+                            <!-- Print Quality dari driver -->
+                            <div class="space-y-2">
+                                <label class="eyebrow block text-ink/60">
+                                    Kualitas Cetak
+                                </label>
+
+                                <select v-if="qualityOption" :value="printSettings.driverOptions?.EPIJ_Qual ??
+                                    qualityOption.defaultValue ??
+                                    ''
+                                    " class="w-full border-2 border-ink bg-paper-soft px-3 py-2.5 text-[13px] text-ink focus:border-blue focus:outline-none"
+                                    @change="
+                                        updateDriverOption(
+                                            'EPIJ_Qual',
+                                            ($event.target as HTMLSelectElement).value
+                                        )
+                                        ">
+                                    <option v-for="choice in qualityOption.choices" :key="choice.value"
+                                        :value="choice.value">
+                                        {{ choice.label }}
+                                    </option>
+                                </select>
+
+                                <p v-else class="text-[12px] text-ink/50">
+                                    Opsi kualitas tidak tersedia dari driver.
+                                </p>
+                            </div>
+
+                            <!-- Borderless dari driver -->
+                            <div v-if="borderlessOption"
+                                class="flex items-center justify-between gap-3 border-2 border-ink/20 bg-paper-soft p-3">
+                                <div>
+                                    <p class="text-[13px] font-bold text-ink">
+                                        Cetak tanpa tepi
+                                    </p>
+                                    <p class="mt-1 text-[11px] text-ink/55">
+                                        Mengikuti opsi borderless yang disediakan driver.
+                                    </p>
+                                </div>
+
+                                <select :value="printSettings.driverOptions?.EPIJ_Bdls ??
+                                    borderlessOption.defaultValue ??
+                                    ''
+                                    " class="max-w-36 border-2 border-ink bg-white px-2 py-2 text-[12px] text-ink focus:border-blue focus:outline-none"
+                                    @change="
+                                        updateDriverOption(
+                                            'EPIJ_Bdls',
+                                            ($event.target as HTMLSelectElement).value
+                                        )
+                                        ">
+                                    <option v-for="choice in borderlessOption.choices" :key="choice.value"
+                                        :value="choice.value">
+                                        {{ choice.label }}
+                                    </option>
+                                </select>
+                            </div>
+
+                            <p v-if="capabilitiesWarning" class="mt-2 text-[11px] leading-5 text-ink/60">
+                                {{ capabilitiesWarning }}
+                            </p>
+                        </div>
+
 
                         <!-- Margins -->
                         <div>

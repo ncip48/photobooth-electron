@@ -11,6 +11,7 @@ export interface CaptureItem {
     id: string
     filename: string
     url: string
+    thumbnail_url?: string | null
     uploading?: boolean
     failed?: boolean
     error?: string

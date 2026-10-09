@@ -5,23 +5,24 @@ interface Photo {
     id: string
     filename: string
     url: string
+    thumbnail_url?: string
 }
 
 withDefaults(
-    defineProps < {
+    defineProps<{
         photos: Photo[]
         photoInHand?: Photo | null
         loading?: boolean
-    } > (),
+    }>(),
     {
         photoInHand: null,
         loading: false,
     }
 )
 
-const emit = defineEmits < {
+const emit = defineEmits<{
     (e: 'select', photo: Photo): void
-}> ()
+}>()
 </script>
 
 <template>
@@ -86,10 +87,11 @@ const emit = defineEmits < {
                 <button v-for="(photo, idx) in photos" :key="photo.id" type="button"
                     class="group relative block w-full overflow-hidden border-2 bg-paper-soft text-left transition-all"
                     :class="photoInHand?.id === photo.id
-                            ? 'border-blue ring-4 ring-blue/30'
-                            : 'border-ink hover:-translate-y-0.5'
+                        ? 'border-blue ring-4 ring-blue/30'
+                        : 'border-ink hover:-translate-y-0.5'
                         " @click="emit('select', photo)">
-                    <img :src="photo.url" :alt="photo.filename" class="block w-full object-cover" />
+                    <img :src="photo.thumbnail_url || photo.url" :alt="photo.filename"
+                        class="block w-full object-cover" />
 
                     <!-- Number badge -->
                     <div
