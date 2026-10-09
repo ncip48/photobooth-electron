@@ -142,6 +142,7 @@ pacman -S --needed \
     mingw-w64-ucrt-x86_64-libtool \
     mingw-w64-ucrt-x86_64-make \
     mingw-w64-ucrt-x86_64-autotools \
+    mingw-w64-ucrt-x86_64-gphoto2 \
     make \
     git
 ```
