@@ -154,8 +154,8 @@ async function printImageWithCups(options: CupsPrintOptions) {
         }
 
         // args.push('-o', `scaling=${scaleFactor}`)
-        const scale = Math.min(800, Math.max(1, Number(scaleFactor) || 100))
-        args.push('-o', `natural-scaling=${scale}`)
+        // const scale = Math.min(800, Math.max(1, Number(scaleFactor) || 100))
+        // args.push('-o', `natural-scaling=${scale}`)
 
         args.push(imagePath)
 
