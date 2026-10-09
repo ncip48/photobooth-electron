@@ -133,13 +133,15 @@ Masih di **MSYS2 MINGW64 shell**:
 
 ```bash
 pacman -S --needed \
-    mingw-w64-x86_64-gcc \
-    mingw-w64-x86_64-gcc-libs \
-    mingw-w64-x86_64-pkg-config \
-    mingw-w64-x86_64-libgphoto2 \
-    mingw-w64-x86_64-libtool \
-    mingw-w64-x86_64-make \
-    mingw-w64-x86_64-autotools \
+    mingw-w64-ucrt-x86_64-gcc \
+    mingw-w64-ucrt-x86_64-gcc-libs \
+    mingw-w64-ucrt-x86_64-pkgconf \
+    mingw-w64-ucrt-x86_64-libgphoto2 \
+    mingw-w64-ucrt-x86_64-libltdl \
+    mingw-w64-ucrt-x86_64-libusb \
+    mingw-w64-ucrt-x86_64-libtool \
+    mingw-w64-ucrt-x86_64-make \
+    mingw-w64-ucrt-x86_64-autotools \
     make \
     git
 ```
