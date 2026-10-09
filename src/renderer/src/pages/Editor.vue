@@ -177,11 +177,50 @@ function handleTemplateChange(templateId: string) {
     selectedDropzoneId.value = null
 }
 
+
+async function drawImageContain(
+    ctx: CanvasRenderingContext2D,
+    url: string,
+    x: number,
+    y: number,
+    targetWidth: number,
+    targetHeight: number,
+): Promise<void> {
+    const image = new Image()
+
+    image.crossOrigin = 'anonymous'
+
+    await new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve()
+        image.onerror = () =>
+            reject(new Error(`Gagal memuat gambar: ${url}`))
+        image.src = url
+    })
+
+    // Pertahankan rasio asli gambar agar seluruh frame terlihat.
+    const scale = Math.min(
+        targetWidth / image.naturalWidth,
+        targetHeight / image.naturalHeight,
+    )
+
+    const width = image.naturalWidth * scale
+    const height = image.naturalHeight * scale
+
+    const drawX = x + (targetWidth - width) / 2
+    const drawY = y + (targetHeight - height) / 2
+
+    ctx.drawImage(image, drawX, drawY, width, height)
+}
+
+
 /* =========================================================
    Composite
    ========================================================= */
+
 async function compositePhotostrip(): Promise<Blob> {
-    if (!selectedTemplate.value) throw new Error('Belum ada template dipilih.')
+    if (!selectedTemplate.value) {
+        throw new Error('Belum ada template dipilih.')
+    }
 
     const tpl = selectedTemplate.value
     const canvasW = tpl.size?.width ?? 1200
@@ -190,32 +229,50 @@ async function compositePhotostrip(): Promise<Blob> {
     const canvas = document.createElement('canvas')
     canvas.width = canvasW
     canvas.height = canvasH
-    const ctx = canvas.getContext('2d')!
 
-    if (tpl.location_url) {
-        await drawImageCover(ctx, tpl.location_url, 0, 0, canvasW, canvasH)
-    } else {
-        ctx.fillStyle = '#ffffff'
-        ctx.fillRect(0, 0, canvasW, canvasH)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
+        throw new Error('Canvas context tidak tersedia.')
     }
 
+    // 1. Gambar background dasar.
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, canvasW, canvasH)
+
+    // 2. Gambar seluruh foto placement di belakang frame.
     for (const dz of tpl.dropzones ?? []) {
         const placement = placements.value[dz.id]
         if (!placement) continue
 
-        const photo = photos.value.find((p) => p.id === placement.photoId)
+        const photo = photos.value.find(
+            (p) => p.id === placement.photoId,
+        )
         if (!photo?.url) continue
 
-        const t = placement.transform ?? { scale: 1, rotate: 0, x: 0, y: 0 }
-        const { width: coverW, height: coverH } = await computeCoverSize(
-            photo.url,
-            dz.width,
-            dz.height
-        )
+        const t = placement.transform ?? {
+            scale: 1,
+            rotate: 0,
+            x: 0,
+            y: 0,
+        }
+
+        const { width: coverW, height: coverH } =
+            await computeCoverSize(
+                photo.url,
+                dz.width,
+                dz.height,
+            )
 
         ctx.save()
+
+        // Batasi foto di dalam dropzone.
         ctx.beginPath()
-        ctx.rect(dz.left, dz.top, dz.width, dz.height)
+        ctx.rect(
+            dz.left,
+            dz.top,
+            dz.width,
+            dz.height,
+        )
         ctx.clip()
 
         const cx = dz.left + dz.width / 2
@@ -227,15 +284,34 @@ async function compositePhotostrip(): Promise<Blob> {
         ctx.rotate((t.rotate * Math.PI) / 180)
 
         await drawImageCentered(ctx, photo.url, coverW, coverH)
+
         ctx.restore()
     }
 
+    // 3. Gambar frame/template paling atas.
+    // Frame transparan akan mempertahankan foto di belakangnya.
+    if (tpl.location_url) {
+        await drawImageContain(
+            ctx,
+            tpl.location_url,
+            0,
+            0,
+            canvasW,
+            canvasH,
+        )
+    }
+
     const blob = await new Promise<Blob | null>((resolve) =>
-        canvas.toBlob(resolve, 'image/jpeg', 0.92)
+        canvas.toBlob(resolve, 'image/jpeg', 0.92),
     )
-    if (!blob) throw new Error('Gagal membuat composite.')
+
+    if (!blob) {
+        throw new Error('Gagal membuat composite.')
+    }
+
     return blob
 }
+
 
 function drawImageCover(
     ctx: CanvasRenderingContext2D,
