@@ -51,6 +51,8 @@ const isSimpleMode = computed(() => {
     return Boolean(event.value?.is_simple && templateId.value)
 })
 
+console.log("IS SIMPLE", isSimpleMode)
+
 const startTimer = () => {
     // Simple mode tidak menggunakan timer
     if (isSimpleMode.value) return
@@ -200,10 +202,11 @@ const takePicture = async () => {
         captureError.value = 'Event belum dimuat.'
         return
     }
-    if (!connected.value) {
-        captureError.value = 'Kamera belum terhubung.'
-        return
-    }
+    console.log(connected)
+    // if (!connected.value) {
+    //     captureError.value = 'Kamera belum terhubung. bro'
+    //     return
+    // }
 
     capturing.value = true
     captureError.value = ''
@@ -274,7 +277,7 @@ const finishSession = async () => {
     stopTimer()
 
     try {
-        if (isSimpleMode) {
+        if (isSimpleMode.value) {
             await finishCapture()
             // =========================================================
             // AUTO SILENT PRINT (uncomment kalau butuh)

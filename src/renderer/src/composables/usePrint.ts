@@ -188,6 +188,9 @@ export function usePrint() {
                 ]),
             )
 
+            // console.log(dataUrl)
+            // return
+
             const res = await electron.print.image({
                 imageDataUrl: dataUrl,
                 printerName: merged.deviceName,

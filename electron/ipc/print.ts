@@ -91,6 +91,7 @@ interface CupsPrintOptions {
     copies?: number
     pageSize: string
     driverOptions?: Record<string, string>
+    scaleFactor?: number
 }
 
 async function printImageWithCups(options: CupsPrintOptions) {
@@ -100,7 +101,10 @@ async function printImageWithCups(options: CupsPrintOptions) {
         copies = 1,
         pageSize,
         driverOptions = {},
+        scaleFactor = 100
     } = options
+
+    console.log(scaleFactor)
 
     if (process.platform !== 'darwin') {
         throw new Error('CUPS printing helper ini khusus macOS.')
@@ -149,7 +153,13 @@ async function printImageWithCups(options: CupsPrintOptions) {
             }
         }
 
+        // args.push('-o', `scaling=${scaleFactor}`)
+        const scale = Math.min(800, Math.max(1, Number(scaleFactor) || 100))
+        args.push('-o', `natural-scaling=${scale}`)
+
         args.push(imagePath)
+
+        console.log('[CUPS] Command:', 'lp', args)
 
         const { stdout, stderr } = await execFileAsync('lp', args)
 
@@ -283,6 +293,7 @@ export function registerPrintHandlers(ipcMain: IpcMain): void {
                     copies: options.copies ?? 1,
                     driverOptions: options.driverOptions ?? {},
                     pageSize: options.pageSize,
+                    scaleFactor: options.scaleFactor
                 })
             }
 

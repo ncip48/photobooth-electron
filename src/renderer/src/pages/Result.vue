@@ -13,6 +13,7 @@ import {
 } from '@/composables/useResult'
 import { useActiveEvent } from '@/composables/useEvents'
 import { usePrint } from '@/composables/usePrint'
+import { loadPrintSettings, PrintSettings } from '@/lib/printStorage'
 
 const route = useRoute()
 const router = useRouter()
@@ -198,6 +199,47 @@ async function resolvePhotostripDataUrl(): Promise<string> {
     throw new Error('Photostrip tidak punya sumber gambar.')
 }
 
+async function scaleImageDataUrl(
+    dataUrl: string,
+    scalePercent: number,
+): Promise<string> {
+    const image = new Image()
+
+    await new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve()
+        image.onerror = () => reject(new Error('Gagal memuat gambar untuk print.'))
+        image.src = dataUrl
+    })
+
+    const canvas = document.createElement('canvas')
+    canvas.width = image.naturalWidth
+    canvas.height = image.naturalHeight
+
+    const ctx = canvas.getContext('2d')
+
+    if (!ctx) {
+        throw new Error('Canvas context tidak tersedia.')
+    }
+
+    // Latar putih agar hasil JPEG tidak transparan.
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    // Skala isi gambar, tetapi pertahankan ukuran kanvas.
+    const scale = Math.max(1, Math.min(100, scalePercent)) / 100
+    const width = canvas.width * scale
+    const height = canvas.height * scale
+
+    const x = (canvas.width - width) / 2
+    const y = (canvas.height - height) / 2
+
+    ctx.drawImage(image, x, y, width, height)
+
+    return canvas.toDataURL('image/jpeg', 1)
+}
+
+const settings = ref<PrintSettings>(loadPrintSettings())
+
 // Handler print — cetak GAMBAR photostrip, bukan halaman
 async function handlePrint(qty: number) {
     if (printing.value) return
@@ -208,7 +250,10 @@ async function handlePrint(qty: number) {
     try {
         const imageDataUrl = await resolvePhotostripDataUrl()
 
-        await printImage(imageDataUrl, { copies: qty })
+        // Atur persentase sesuai hasil pengujian.
+        const scaledImage = await scaleImageDataUrl(imageDataUrl, settings.value.scaleFactor)
+
+        await printImage(scaledImage, { copies: qty })
 
         printMessage.value = `Berhasil mengirim ${qty} salinan ke printer.`
     } catch (err: any) {
