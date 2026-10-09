@@ -147,6 +147,8 @@ pacman -S --needed \
     git
 ```
 
+winget install --id=Microsoft.VisualStudio.2022.BuildTools -e
+
 Tekan `Y` kalau diminta konfirmasi.
 
 **Estimasi download:** ~200–400 MB, bisa 5–15 menit tergantung koneksi.
