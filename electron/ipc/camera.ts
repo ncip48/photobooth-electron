@@ -148,4 +148,14 @@ export function registerCameraHandlers(ipcMain: IpcMain): void {
             }
         }
     )
+
+    ipcMain.handle('camera:preview-start', (e, payload?: { fps?: number }) => {
+        cameraService.startPreviewLoop(e.sender, payload?.fps ?? 15)
+        return { success: true }
+    })
+
+    ipcMain.handle('camera:preview-stop', () => {
+        cameraService.stopPreviewLoop()
+        return { success: true }
+    })
 }

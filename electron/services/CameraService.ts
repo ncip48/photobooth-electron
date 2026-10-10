@@ -3,6 +3,7 @@ import { promises as fs } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
 import { exec } from 'child_process'
+import { webContents } from 'electron'
 
 /* =========================================================
    Types
@@ -435,6 +436,55 @@ class CameraService {
         await fs.unlink(tmpname).catch(() => undefined)
 
         return { base64: `data:image/jpeg;base64,${buffer.toString('base64')}` }
+    }
+
+    private previewLoopActive = false
+    private previewTarget: Electron.WebContents | null = null
+
+    startPreviewLoop(wc: Electron.WebContents, fps = 15) {
+        if (this.previewLoopActive) return
+        this.previewLoopActive = true
+        this.previewTarget = wc
+
+        const interval = Math.max(1000 / fps, 40) // jangan < 40ms, kamera biasanya mentok ~20fps
+
+        const tick = async () => {
+            if (!this.previewLoopActive || !this.camera || !this.connected) return
+
+            try {
+                const targetPath = join(app.getPath('temp'), `preview-${Date.now()}.XXXXXX`)
+
+                const tmpname = await new Promise<string>((resolve, reject) => {
+                    this.camera!.takePicture({ preview: true, targetPath }, (err, name) => {
+                        if (err) return reject(err)
+                        if (!name) return reject(new Error('no preview path'))
+                        resolve(name)
+                    })
+                })
+
+                const buffer = await fs.readFile(tmpname)
+                await fs.unlink(tmpname).catch(() => undefined)
+
+                if (!this.previewLoopActive) return
+                if (!wc.isDestroyed()) {
+                    // kirim Buffer — Electron structured-clone, TIDAK base64
+                    wc.send('camera:preview-frame', buffer)
+                }
+            } catch {
+                // preview bisa gagal sesaat; lanjut saja
+            }
+
+            if (this.previewLoopActive) {
+                setTimeout(tick, interval)
+            }
+        }
+
+        tick()
+    }
+
+    stopPreviewLoop() {
+        this.previewLoopActive = false
+        this.previewTarget = null
     }
 }
 

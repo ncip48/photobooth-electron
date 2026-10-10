@@ -21,6 +21,13 @@ const api = {
         capture: () => ipcRenderer.invoke('camera:capture'),
         captureToFile: (sessionId: string) =>
             ipcRenderer.invoke('camera:capture-to-file', { sessionId }),
+        previewStart: (fps?: number) => ipcRenderer.invoke('camera:preview-start', { fps }),
+        previewStop: () => ipcRenderer.invoke('camera:preview-stop'),
+        onPreviewFrame: (cb: (buf: Uint8Array) => void) => {
+            const listener = (_: unknown, buf: Uint8Array) => cb(buf)
+            ipcRenderer.on('camera:preview-frame', listener)
+            return () => ipcRenderer.off('camera:preview-frame', listener)
+        },
     },
 
     // Print

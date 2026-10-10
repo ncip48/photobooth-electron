@@ -171,18 +171,55 @@ export function useCamera() {
     /* =========================================================
        Preview loop
        ========================================================= */
+    // function startPreview() {
+    //     if (previewInterval) return
+    //     previewInterval = setInterval(refreshPreview, 500)
+    // }
+
+    // async function stopPreview() {
+    //     if (previewInterval) { clearInterval(previewInterval); previewInterval = null }
+    //     if (refreshPromise) { try { await refreshPromise } catch { } }
+    //     if (livePreviewUrl.value) {
+    //         URL.revokeObjectURL(livePreviewUrl.value)
+    //         livePreviewUrl.value = null
+    //     }
+    // }
+
+    let detachFrameListener: (() => void) | null = null
+
     function startPreview() {
-        if (previewInterval) return
-        previewInterval = setInterval(refreshPreview, 500)
+        if (detachFrameListener) return
+
+        const electron = getElectron()
+        electron.camera.previewStart(15)
+
+        detachFrameListener = electron.camera.onPreviewFrame((buf) => {
+            if (!connected.value) return
+            // buf sudah Uint8Array di renderer
+            const blob = new Blob([buf], { type: 'image/jpeg' })
+            const url = URL.createObjectURL(blob)
+
+            const old = livePreviewUrl.value
+            livePreviewUrl.value = url
+            if (old?.startsWith('blob:')) {
+                // revoke setelah frame baru terpasang agar tidak flicker
+                queueMicrotask(() => URL.revokeObjectURL(old))
+            }
+        })
     }
 
     async function stopPreview() {
-        if (previewInterval) { clearInterval(previewInterval); previewInterval = null }
-        if (refreshPromise) { try { await refreshPromise } catch { } }
-        if (livePreviewUrl.value) {
-            URL.revokeObjectURL(livePreviewUrl.value)
-            livePreviewUrl.value = null
+        if (detachFrameListener) {
+            detachFrameListener()
+            detachFrameListener = null
         }
+        const electron = getElectron()
+        try { await electron.camera.previewStop() } catch { /* ignore */ }
+
+        if (livePreviewUrl.value?.startsWith('blob:')) {
+            URL.revokeObjectURL(livePreviewUrl.value)
+        }
+        livePreviewUrl.value = null
     }
 
     let refreshing = false
