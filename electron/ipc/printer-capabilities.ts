@@ -630,13 +630,23 @@ export async function getPrinterCapabilities(
     }
 
     if (process.platform === 'win32') {
-        return {
-            printerName,
-            platform: process.platform,
-            source: 'windows-driver',
-            papers: await windowsPapers(printerName),
-        }
+    const [papers, options] = await Promise.all([
+        windowsPapers(printerName),
+        windowsDriverOptions(printerName),
+    ])
+
+    return {
+        printerName,
+        platform: process.platform,
+        source: 'windows-driver',
+        papers,
+        options,
+        warning:
+            options.length === 0
+                ? 'Driver Windows tidak mengekspos opsi jenis kertas, kualitas, atau borderless melalui PrintCapabilities.'
+                : undefined,
     }
+}
 
     if (
         process.platform === 'darwin' ||
@@ -665,4 +675,132 @@ export async function getPrinterCapabilities(
     }
 
     throw new Error(`Unsupported platform: ${process.platform}`)
+}
+
+
+/**
+ * Windows driver options for the SettingModal:
+ * - EPIJ_Medi: media type
+ * - EPIJ_Qual: print quality
+ * - EPIJ_Bdls: borderless
+ *
+ * Replace the existing windowsDriverOptions() with this implementation.
+ * Note: System.Printing exposes standard capabilities, not every vendor-specific
+ * Epson option. Unsupported options are intentionally omitted.
+ */
+
+async function windowsDriverOptions(
+    printerName: string,
+): Promise<DriverOption[]> {
+    const script = String.raw`
+$ErrorActionPreference = 'Stop'
+$printerName = $env:PHOTOBOOTH_PRINTER
+
+$config = Get-PrintConfiguration -PrinterName $printerName
+[xml]$xml = $config.PrintCapabilitiesXML
+
+$ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+$ns.AddNamespace(
+    'psf',
+    'http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework'
+)
+$ns.AddNamespace(
+    'psk',
+    'http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords'
+)
+
+function Get-FeatureOptions(
+    [string]$featureName,
+    [string]$optionId,
+    [string]$label
+) {
+    $feature = $xml.SelectSingleNode(
+        "//psf:Feature[@name='$featureName']",
+        $ns
+    )
+
+    if ($null -eq $feature) {
+        return
+    }
+
+    $choices = @(
+        foreach ($option in $feature.SelectNodes('./psf:Option', $ns)) {
+            $name = $option.GetAttribute('name')
+            $display = $option.SelectSingleNode(
+                './psf:Property[@name="psk:DisplayName"]/psf:Value',
+                $ns
+            )
+
+            if ([string]::IsNullOrWhiteSpace($name)) {
+                continue
+            }
+
+            # Nilai harus mempertahankan ID asli dari driver.
+            # Hapus prefix namespace saja agar cocok dengan
+            # opsi driver Epson yang digunakan oleh aplikasi.
+            # Pertahankan nama opsi asli dari PrintCapabilitiesXML.
+$value = $name
+
+$displayName = if (
+    $null -ne $display -and
+    -not [string]::IsNullOrWhiteSpace($display.InnerText)
+) {
+    $display.InnerText
+} else {
+    $name
+}
+
+[PSCustomObject]@{
+    value = $value
+    label = $displayName
+}
+        }
+    )
+
+    if ($choices.Count -gt 0) {
+        [PSCustomObject]@{
+            id = $optionId
+            label = $label
+            choices = @($choices)
+        }
+    }
+}
+
+$options = @()
+
+$options += Get-FeatureOptions 'psk:PageMediaType' 'EPIJ_Medi' 'Paper Type'
+$options += Get-FeatureOptions 'psk:PageOutputQuality' 'EPIJ_Qual' 'Print Quality'
+$options += Get-FeatureOptions 'psk:PageBorderless' 'EPIJ_Bdls' 'Borderless'
+
+ConvertTo-Json -InputObject @($options) -Depth 6 -Compress`
+
+    const { stdout } = await execFileAsync(
+        'powershell.exe',
+        [
+            '-NoLogo',
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            script,
+        ],
+        {
+            windowsHide: true,
+            timeout: 15000,
+            maxBuffer: 2 * 1024 * 1024,
+            env: {
+                ...process.env,
+                PHOTOBOOTH_PRINTER: printerName,
+            },
+        },
+    )
+
+    const parsed = JSON.parse(stdout.trim() || '[]') as DriverOption[]
+
+    return parsed.filter(
+        (option) =>
+            option &&
+            typeof option.id === 'string' &&
+            Array.isArray(option.choices) &&
+            option.choices.length > 0,
+    )
 }

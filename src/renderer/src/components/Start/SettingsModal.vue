@@ -336,6 +336,8 @@ function getConfigByPath(config: any, path: string[]): any {
 const availableConfigs = computed<ConfigNode[]>(() => {
     const config = cameraConfig.value
 
+    console.log(config, "cfg")
+
     if (!config) return []
 
     return CAMERA_CONFIG_KEYS.flatMap((definition) => {

@@ -1,492 +1,517 @@
-import gphoto2 from 'gphoto2'
-import { promises as fs } from 'fs'
-import { join } from 'path'
-import { app } from 'electron'
-import { exec } from 'child_process'
-import { webContents } from 'electron'
+import { promises as fs } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
+import { spawn } from 'node:child_process'
+import { app, type WebContents } from 'electron'
 
-/* =========================================================
-   Types
-   ========================================================= */
-interface Camera {
-    model: string
-    port?: string
-    exit?: (cb: (err: Error | null) => void) => void
-    getConfig: (cb: (err: Error | null, settings: any) => void) => void
-    setConfigValue: (
-        key: string,
-        value: any,
-        cb: (err: Error | null) => void
-    ) => void
-    takePicture: (
-        options: {
-            download?: boolean
-            keep?: boolean
-            preview?: boolean
-            targetPath?: string
-        },
-        cb: (err: Error | null, data?: Buffer | string) => void
-    ) => void
-    downloadPicture: (
-        options: { cameraPath: string; targetPath: string },
-        cb: (err: Error | null, tmpname?: string) => void
-    ) => void
+type CameraInfo = { model: string; port?: string }
+type CaptureResult = { base64: string; buffer: Buffer }
+type CaptureFileResult = { path: string; filename: string }
+type SettingNode = {
+  name: string
+  label: string
+  value: string
+  choices: string[]
+  readonly: boolean
+  type: 'text' | 'menu'
+  children: SettingNode[]
 }
 
-console.log('[CameraService] Module loaded')
-console.log('[CameraService] NODE_ENV:', process.env.NODE_ENV)
-console.log('[CameraService] isPackaged:', app.isPackaged)
+const DEFAULT_DCC_URL = 'http://127.0.0.1:5513'
 
-/* =========================================================
-   CameraService — singleton
-   ========================================================= */
+/**
+ * digiCamControl-backed CameraService.
+ *
+ * Run Electron on Windows, start digiCamControl, and enable:
+ * Settings -> Webserver -> Use web server.
+ *
+ * DCC owns the physical USB connection. disconnect() clears this service's
+ * selection and stops live view; it does not close DCC or release its USB handle.
+ */
 class CameraService {
-    private GPhoto: any
-    private camera: Camera | null = null
-    private connected = false
-    private connectedModel: string | null = null
-    private connectedIndex = -1
+  private readonly baseUrl: string
+  private connected = false
+  private connectedModel: string | null = null
+  private connectedSerial: string | null = null
+  private connectedIndex = -1
+  private previewStarted = false
+  private previewLoopActive = false
+  private previewTarget: WebContents | null = null
+  private previewTickInFlight = false
+  private listInFlight: Promise<CameraInfo[]> | null = null
+  private connectInFlight: Promise<{ model: string }> | null = null
+  private disconnectInFlight: Promise<void> | null = null
 
-    private previewInFlight: Promise<string> | null = null
-    private disconnectInFlight: Promise<void> | null = null
-    private connectInFlight: Promise<{ model: string }> | null = null
-    private listInFlight: Promise<{ model: string; port?: string }[]> | null = null
+  constructor() {
+    this.baseUrl = (process.env.DIGICAMCONTROL_URL || DEFAULT_DCC_URL).replace(/\/+$/, '')
+    console.log('[CameraService] digiCamControl URL:', this.baseUrl)
+  }
 
-    /** Cache objek kamera hidup (bukan cuma model+port). */
-    private rawList: Camera[] | null = null
-    private rawListAt = 0
-    private static CACHE_TTL_MS = 5_000
+  /**
+   * Requests a raw response body using Windows curl.exe.
+   *
+   * digiCamControl's Griffin.Networking webserver sends duplicate
+   * Content-Length headers. Node's fetch()/http parser rejects that response,
+   * while curl.exe can read it. This method intentionally captures only the
+   * response body (not headers), so it also works for JPEG live-view frames.
+   */
+  private requestBuffer(path: string, timeoutMs = 15_000): Promise<Buffer> {
+    const url = new URL(path, `${this.baseUrl}/`).toString()
 
-    constructor() {
-        const GPhoto2 = gphoto2.GPhoto2
-        this.GPhoto = new GPhoto2()
-        this.GPhoto.setLogLevel(process.env.NODE_ENV === 'development' ? 1 : 0)
+    return new Promise<Buffer>((resolve, reject) => {
+      const stdoutChunks: Buffer[] = []
+      const stderrChunks: Buffer[] = []
+      let settled = false
+      let timer: ReturnType<typeof setTimeout> | undefined
+
+      const finish = (error?: Error, result?: Buffer): void => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+
+        if (error) reject(error)
+        else resolve(result ?? Buffer.alloc(0))
+      }
+
+      const child = spawn(
+        'curl.exe',
+        [
+          '--silent',
+          '--show-error',
+          '--fail',
+          '--max-time',
+          String(Math.max(1, Math.ceil(timeoutMs / 1000))),
+          url,
+        ],
+        {
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      )
+
+      timer = setTimeout(() => {
+        child.kill()
+        finish(new Error(`Timeout menghubungi digiCamControl di ${this.baseUrl}.`))
+      }, timeoutMs + 1_000)
+
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdoutChunks.push(Buffer.from(chunk))
+      })
+
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderrChunks.push(Buffer.from(chunk))
+      })
+
+      child.on('error', (error) => {
+        finish(
+          new Error(
+            `Gagal menjalankan curl.exe. Pastikan curl tersedia di Windows PATH. Detail: ${error.message}`,
+          ),
+        )
+      })
+
+      child.on('close', (code) => {
+        if (settled) return
+
+        if (code !== 0) {
+          const detail = Buffer.concat(stderrChunks).toString('utf8').trim()
+          finish(
+            new Error(
+              `Request digiCamControl gagal (curl exit ${code}): ${detail || 'Tidak ada detail error.'}`,
+            ),
+          )
+          return
+        }
+
+        finish(undefined, Buffer.concat(stdoutChunks))
+      })
+    })
+  }
+
+  private async requestText(path: string, timeoutMs = 15_000): Promise<string> {
+    const body = (await this.requestBuffer(path, timeoutMs)).toString('utf8').trim()
+
+    if (/^\s*(error|exception)\s*[:\-]/i.test(body)) {
+      throw new Error(`digiCamControl: ${body}`)
     }
 
-    /* ----------------------------------------------------------------
-       list() — hanya enumerate. Reuse cache kalau masih fresh.
-       ---------------------------------------------------------------- */
-    async list(): Promise<{ model: string; port?: string }[]> {
-        // kalau kamera aktif, langsung kembalikan itu
-        if (this.camera && this.connected) {
-            return [{ model: this.camera.model, port: this.camera.port }]
-        }
+    return body
+  }
 
-        if (this.disconnectInFlight) await this.disconnectInFlight
-        if (this.connectInFlight) await this.connectInFlight
-        if (this.listInFlight) return this.listInFlight
+  private command(command: string, param1 = '', param2 = '', timeoutMs = 15_000): Promise<string> {
+    const query = new URLSearchParams({ slc: command, param1, param2 })
+    return this.requestText(`/?${query.toString()}`, timeoutMs)
+  }
 
-        // reuse cache kalau masih fresh
-        if (this.rawList && Date.now() - this.rawListAt < CameraService.CACHE_TTL_MS) {
-            return this.rawList.map((c) => ({ model: c.model, port: c.port }))
-        }
+  private windowCommand(command: string): Promise<string> {
+    return this.requestText(`/?${new URLSearchParams({ CMD: command })}`)
+  }
 
-        const op = new Promise<{ model: string; port?: string }[]>((resolve) => {
-            this.GPhoto.list((list: Camera[]) => {
-                this.rawList = list ?? []
-                this.rawListAt = Date.now()
-                resolve(
-                    (list ?? []).map((cam) => ({ model: cam.model, port: cam.port }))
-                )
-            })
-        })
+  private parseList(raw: string): string[] {
+    return raw.split(/\r?\n/)
+      .map((line) => line.trim().replace(/^[-*]\s*/, ''))
+      .filter(Boolean)
+      .filter((line) => !/^(ok|success|cameras?|serials?)\s*:?\s*$/i.test(line))
+      .filter((line) => !/^(error|exception)\b/i.test(line))
+  }
 
-        this.listInFlight = op
+  private assertConnected(): void {
+    if (!this.connected || !this.connectedSerial) throw new Error('Camera not connected.')
+  }
+
+  private mapProperty(key: string): string {
+    const last = key.split('/').filter(Boolean).pop()?.toLowerCase().replace(/[^a-z0-9]/g, '') ?? ''
+    const aliases: Record<string, string> = {
+      iso: 'iso',
+      isonumber: 'iso',
+      aperture: 'aperture',
+      fnumber: 'aperture',
+      shutterspeed: 'shutterspeed',
+      shutter: 'shutterspeed',
+      exposurecompensation: 'exposurecompensation',
+      exposurecomp: 'exposurecompensation',
+      focusmode: 'focusmode',
+      whitebalance: 'whitebalance',
+      mode: 'mode',
+      cameramode: 'mode',
+      compressionsetting: 'compressionsetting',
+      imagequality: 'compressionsetting',
+    }
+    const property = aliases[last]
+    if (!property) throw new Error(`Pengaturan "${key}" belum dipetakan ke properti digiCamControl.`)
+    return property
+  }
+
+  private async getProperty(property: string): Promise<string> {
+    return this.command('get', property, '')
+  }
+
+  private async getChoices(property: string): Promise<string[]> {
+    try {
+      // DCC expects list&param1=iso, not list&param1=camera.iso.
+      return this.parseList(await this.command('list', property, ''))
+    } catch (error) {
+      console.warn(`[CameraService] Pilihan ${property} tidak tersedia:`, error)
+      return []
+    }
+  }
+
+  private async getCameraModel(serial: string): Promise<string> {
+    // DCC's list cameras command returns serial numbers. Select that camera,
+    // then query its device name for a human-readable model.
+    await this.command('set', 'camera', serial)
+    try {
+      const name = await this.command('get', 'property.devicename', '')
+      const cleaned = name.trim()
+      if (cleaned) {
+        // DCC may return e.g. "Canon EOS 550D (1132568580)".
+        return cleaned
+  .replace(`(${serial})`, '')
+  .trim() || cleaned
+      }
+    } catch (error) {
+      console.warn(`[CameraService] Nama kamera untuk ${serial} tidak tersedia:`, error)
+    }
+    return serial
+  }
+
+  private async captureToPath(targetPath: string): Promise<void> {
+    await fs.mkdir(join(targetPath, '..'), { recursive: true })
+    await this.command('capture', targetPath, '', 120_000)
+
+    // Allow a short delay for the camera/driver to flush the file to disk.
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      try {
+        const stat = await fs.stat(targetPath)
+        if (stat.isFile() && stat.size > 0) return
+      } catch {
+        // File may not have appeared yet.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    }
+    throw new Error(
+      `File hasil capture tidak ditemukan: ${targetPath}. Periksa mode transfer dan session digiCamControl.`,
+    )
+  }
+
+  /** Returns camera identifiers exposed by DCC's "list cameras" command. */
+  async list(): Promise<CameraInfo[]> {
+    if (this.connected && this.connectedSerial) {
+      return [{ model: this.connectedModel ?? this.connectedSerial, port: this.connectedSerial }]
+    }
+    if (this.listInFlight) return this.listInFlight
+
+    const operation = (async () => {
+      const serials = this.parseList(await this.command('list', 'cameras', ''))
+      const cameras: CameraInfo[] = []
+      for (const serial of serials) {
+        const model = await this.getCameraModel(serial)
+        cameras.push({ model, port: serial })
+      }
+      return cameras
+    })()
+
+    this.listInFlight = operation
+    try {
+      return await operation
+    } finally {
+      if (this.listInFlight === operation) this.listInFlight = null
+    }
+  }
+
+  /** Selects a camera already connected to digiCamControl. */
+  async connect(index = 0): Promise<{ model: string }> {
+    if (this.connected && this.connectedIndex === index && this.connectedModel) {
+      return { model: this.connectedModel }
+    }
+    if (this.connected) {
+      throw new Error(`Camera index ${index} requested but index ${this.connectedIndex} is selected. Disconnect first.`)
+    }
+    if (this.disconnectInFlight) await this.disconnectInFlight
+    if (this.connectInFlight) return this.connectInFlight
+
+    const operation = (async () => {
+      const cameras = await this.list()
+      const camera = cameras[index]
+      if (!camera) {
+        throw new Error(cameras.length
+          ? `Camera at index ${index} not found.`
+          : 'No camera found. Pastikan Canon terdeteksi di aplikasi digiCamControl.')
+      }
+
+      const serial = camera.port ?? camera.model
+      await this.command('set', 'camera', serial)
+      this.connected = true
+      this.connectedSerial = serial
+      this.connectedModel = camera.model
+      this.connectedIndex = index
+      return { model: camera.model }
+    })()
+
+    this.connectInFlight = operation
+    try {
+      return await operation
+    } finally {
+      if (this.connectInFlight === operation) this.connectInFlight = null
+    }
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.disconnectInFlight) return this.disconnectInFlight
+    const operation = (async () => {
+      this.previewLoopActive = false
+      this.previewTarget = null
+      if (this.previewStarted) {
         try {
-            return await op
-        } finally {
-            if (this.listInFlight === op) this.listInFlight = null
+          await this.windowCommand('LiveViewWnd_Hide')
+        } catch (error) {
+          console.warn('[CameraService] Failed to stop DCC live view:', error)
         }
+      }
+      this.previewStarted = false
+      this.connected = false
+      this.connectedModel = null
+      this.connectedSerial = null
+      this.connectedIndex = -1
+    })()
+
+    this.disconnectInFlight = operation
+    try {
+      await operation
+    } finally {
+      if (this.disconnectInFlight === operation) this.disconnectInFlight = null
     }
+  }
 
-    /* ----------------------------------------------------------------
-       connect() — TIDAK enumerate ulang kalau cache ada.
-       ---------------------------------------------------------------- */
-    async connect(index = 0): Promise<{ model: string }> {
-        if (this.camera && this.connected && this.connectedIndex === index) {
-            return { model: this.connectedModel ?? this.camera.model }
-        }
-        // Kamera lain sedang aktif → harus disconnect dulu di caller.
-        if (this.camera && this.connected) {
-            throw new Error(
-                `Camera index ${index} requested but index ${this.connectedIndex} is still connected. Disconnect first.`
-            )
-        }
+  getStatus(): { connected: boolean; model: string | null } {
+    return { connected: this.connected, model: this.connectedModel }
+  }
 
-        if (this.disconnectInFlight) await this.disconnectInFlight
-        if (this.connectInFlight) return this.connectInFlight
+  /**
+   * Returns a normalized settings tree with children/value/choices fields.
+   * It is not identical to libgphoto2's config tree; renderer code that depends
+   * on gphoto2-specific node fields may need a small adapter.
+   */
+  
+async getConfig(): Promise<any> {
+  this.assertConnected()
 
-        const op = (async () => {
-            // Ambil dari cache kalau ada, baru enumerate
-            let list = this.rawList
-            if (!list || Date.now() - this.rawListAt >= CameraService.CACHE_TTL_MS) {
-                list = await new Promise<Camera[]>((resolve) => {
-                    this.GPhoto.list((l: Camera[]) => resolve(l ?? []))
-                })
-                this.rawList = list
-                this.rawListAt = Date.now()
-            }
+  const definitions = [
+    {
+      name: 'aperture',
+      label: 'Aperture',
+      group: 'capturesettings',
+      property: 'aperture',
+    },
+    {
+      name: 'shutterspeed',
+      label: 'Shutter Speed',
+      group: 'capturesettings',
+      property: 'shutterspeed',
+    },
+    {
+      name: 'iso',
+      label: 'ISO',
+      group: 'imgsettings',
+      property: 'iso',
+    },
+    {
+      name: 'whitebalance',
+      label: 'White Balance',
+      group: 'imgsettings',
+      property: 'whitebalance',
+    },
+  ] as const
 
-            if (!list || list.length === 0) {
-                throw new Error(
-                    'No camera found. Pastikan DSLR terhubung via USB dan dalam mode PTP/MTP.'
-                )
-            }
-            const cam = list[index]
-            if (!cam) throw new Error(`Camera at index ${index} not found.`)
+  const groups: Record<string, Record<string, any>> = {
+    capturesettings: {},
+    imgsettings: {},
+  }
 
-            this.camera = cam
-            this.connected = true
-            this.connectedModel = cam.model
-            this.connectedIndex = index
+  for (const definition of definitions) {
+    try {
+      const [value, choices] = await Promise.all([
+        this.getProperty(definition.property),
+        this.getChoices(definition.property),
+      ])
 
-            // Beri waktu gphoto2 klaim USB sebelum operasi berikutnya.
-            await new Promise((r) => setTimeout(r, 150))
-
-            return { model: cam.model }
-        })()
-
-        this.connectInFlight = op
-        try {
-            return await op
-        } finally {
-            if (this.connectInFlight === op) this.connectInFlight = null
-        }
+      groups[definition.group][definition.name] = {
+        name: definition.name,
+        label: definition.label,
+        value,
+        choices,
+        readonly: false,
+        type: choices.length ? 'menu' : 'text',
+        children: [],
+      }
+    } catch (error) {
+      console.warn(
+        `[CameraService] Gagal membaca ${definition.name}:`,
+        error,
+      )
     }
+  }
 
-    /* =========================================================
-       Disconnect
-       ========================================================= */
-    async disconnect(): Promise<void> {
-        if (this.disconnectInFlight) return this.disconnectInFlight
-
-        const op = (async () => {
-            const camera = this.camera
-            if (!camera) {
-                this.connected = false
-                this.connectedModel = null
-                this.connectedIndex = -1
-                return
-            }
-
-            if (this.previewInFlight) {
-                try { await this.previewInFlight } catch { /* ignore */ }
-            }
-
-            if (typeof camera.exit === 'function') {
-                await new Promise<void>((resolve) => {
-                    camera.exit!((err) => {
-                        if (err) console.warn('[CameraService] exit warn:', err.message)
-                        resolve()
-                    })
-                })
-            }
-
-            if (process.platform === 'darwin') {
-                // Lepas juga ke PTPCamera. Snapshot cukup sekali; jangan spam.
-                exec('killall PTPCamera', () => { /* ignore */ })
-            }
-
-            if (this.camera === camera) {
-                this.camera = null
-                this.connected = false
-                this.connectedModel = null
-                this.connectedIndex = -1
-                this.rawList = null      // buang cache — device state berubah
-                this.rawListAt = 0
-            }
-
-            await new Promise((r) => setTimeout(r, 400))
-        })()
-
-        this.disconnectInFlight = op
-        try {
-            await op
-        } finally {
-            if (this.disconnectInFlight === op) this.disconnectInFlight = null
-        }
-    }
-
-
-    /* =========================================================
-       Get connection status
-       ========================================================= */
-    getStatus() {
-        return {
-            connected: this.connected,
-            model: this.connectedModel,
-        }
-    }
-
-    /* =========================================================
-       Get config tree
-       ========================================================= */
-    // async getConfig(): Promise<any> {
-    //     if (!this.camera) throw new Error('Camera not connected.')
-
-    //     return new Promise((resolve, reject) => {
-    //         this.camera!.getConfig((err, settings) => {
-
-    //             if (err) reject(err)
-    //             else resolve(settings)
-    //         })
-    //     })
-    // }
-
-    async getConfig(): Promise<any> {
-        const camera = this.camera
-
-        if (!camera || !this.connected) {
-            throw new Error('Camera not connected.')
-        }
-
-        return new Promise((resolve, reject) => {
-            camera.getConfig((err, settings) => {
-                if (err) {
-                    console.error('[CameraService] getConfig error:', err)
-
-                    const message =
-                        err instanceof Error
-                            ? err.message
-                            : typeof err === 'string'
-                                ? err
-                                : JSON.stringify(err) || 'Unknown gphoto2 error'
-
-                    reject(new Error(message))
-                    return
-                }
-
-                if (settings == null) {
-                    reject(
-                        new Error(
-                            'Camera returned empty configuration.',
-                        ),
-                    )
-                    return
-                }
-
-                resolve(settings)
-            })
-        })
-    }
-
-    /* =========================================================
-       Set config value (iso, aperture, shutterspeed, dll)
-       ========================================================= */
-    async setConfigValue(key: string, value: string | number): Promise<void> {
-        if (!this.camera) throw new Error('Camera not connected.')
-
-        return new Promise((resolve, reject) => {
-            this.camera!.setConfigValue(key, value, (err) => {
-                if (err) reject(err)
-                else resolve()
-            })
-        })
-    }
-
-    /* =========================================================
-       Capture preview (untuk live view) — return base64
-       ========================================================= */
-
-    async capturePreview(): Promise<string> {
-        if (this.disconnectInFlight) throw new Error('Camera is disconnecting.')
-        if (!this.camera || !this.connected) throw new Error('Camera not connected.')
-
-        // Hindari dua operasi preview sekaligus.
-        if (this.previewInFlight) {
-            return this.previewInFlight
-        }
-
-        const camera = this.camera
-
-        const operation = new Promise<string>((resolve, reject) => {
-            const targetPath = join(
-                app.getPath('temp'),
-                `preview-${Date.now()}.XXXXXX`
-            )
-
-            camera.takePicture(
-                { preview: true, targetPath },
-                (err, tmpname) => {
-                    if (err) {
-                        reject(err)
-                        return
-                    }
-
-                    if (!tmpname) {
-                        reject(new Error('Preview capture returned no path.'))
-                        return
-                    }
-
-                    fs.readFile(tmpname)
-                        .then((buffer) => {
-                            const base64 =
-                                `data:image/jpeg;base64,${buffer.toString('base64')}`
-
-                            return fs.unlink(tmpname)
-                                .catch(() => undefined)
-                                .then(() => base64)
-                        })
-                        .then(resolve)
-                        .catch(reject)
-                }
-            )
-        })
-
-        this.previewInFlight = operation
-
-        try {
-            return await operation
-        } finally {
-            if (this.previewInFlight === operation) {
-                this.previewInFlight = null
-            }
-        }
-    }
-
-    /* =========================================================
-       Capture full image — return { data, buffer }
-       ========================================================= */
-    async captureImage(): Promise<{ base64: string; buffer: Buffer }> {
-        if (!this.camera) throw new Error('Camera not connected.')
-
-        const dir = app.getPath('temp')
-        const targetPath = join(dir, `capture-${Date.now()}.XXXXXX`)
-
-        const tmpname = await new Promise<string>((resolve, reject) => {
-            this.camera!.takePicture({ targetPath }, (err, name) => {
-                if (err) return reject(err)
-                if (!name) return reject(new Error('Capture returned no path.'))
-                resolve(name)
-            })
-        })
-
-        const buffer = await fs.readFile(tmpname)
-        await fs.unlink(tmpname).catch(() => undefined)
-
-        return {
-            buffer,
-            base64: `data:image/jpeg;base64,${buffer.toString('base64')}`,
-        }
-    }
-
-
-    /* =========================================================
-       Capture + save ke disk langsung
-       ========================================================= */
-    async captureToFile(sessionId: string): Promise<{
-        path: string
-        filename: string
-    }> {
-        if (!this.camera) throw new Error('Camera not connected.')
-
-        const dir = join(app.getPath('userData'), 'captures', sessionId)
-        await fs.mkdir(dir, { recursive: true })
-
-        const timestamp = new Date()
-            .toISOString()
-            .replace(/[:.]/g, '-')
-        const targetPath = join(dir, `capture-${timestamp}.XXXXXX`)
-
-        return new Promise((resolve, reject) => {
-            this.camera!.takePicture(
-                { targetPath },
-                async (err, tmpname) => {
-                    if (err) {
-                        reject(err)
-                        return
-                    }
-                    if (!tmpname) {
-                        reject(new Error('Capture returned no path.'))
-                        return
-                    }
-
-                    // tmpname punya suffix random dari gphoto2
-                    // rename ke nama final
-                    const filename = `capture-${timestamp}.jpg`
-                    const finalPath = join(dir, filename)
-
-                    try {
-                        await fs.rename(tmpname, finalPath)
-                        resolve({ path: finalPath, filename })
-                    } catch (renameErr) {
-                        reject(renameErr)
-                    }
-                }
-            )
-        })
-    }
-
-    async captureToTempFile(): Promise<{ base64: string }> {
-        if (!this.camera || !this.connected) throw new Error('Camera not connected.')
-
-        const dir = app.getPath('temp')
-        const targetPath = join(dir, `capture-${Date.now()}.XXXXXX`)
-
-        const tmpname = await new Promise<string>((resolve, reject) => {
-            this.camera!.takePicture({ targetPath }, (err, name) => {
-                if (err) return reject(err)
-                if (!name) return reject(new Error('Capture returned no path.'))
-                resolve(name)
-            })
-        })
-
-        // Baca di JS layer — Buffer yang dibuat oleh `fs` aman (di sandbox).
-        const buffer = await fs.readFile(tmpname)
-        await fs.unlink(tmpname).catch(() => undefined)
-
-        return { base64: `data:image/jpeg;base64,${buffer.toString('base64')}` }
-    }
-
-    private previewLoopActive = false
-    private previewTarget: Electron.WebContents | null = null
-
-    startPreviewLoop(wc: Electron.WebContents, fps = 15) {
-        if (this.previewLoopActive) return
-        this.previewLoopActive = true
-        this.previewTarget = wc
-
-        const interval = Math.max(1000 / fps, 40) // jangan < 40ms, kamera biasanya mentok ~20fps
-
-        const tick = async () => {
-            if (!this.previewLoopActive || !this.camera || !this.connected) return
-
-            try {
-                const targetPath = join(app.getPath('temp'), `preview-${Date.now()}.XXXXXX`)
-
-                const tmpname = await new Promise<string>((resolve, reject) => {
-                    this.camera!.takePicture({ preview: true, targetPath }, (err, name) => {
-                        if (err) return reject(err)
-                        if (!name) return reject(new Error('no preview path'))
-                        resolve(name)
-                    })
-                })
-
-                const buffer = await fs.readFile(tmpname)
-                await fs.unlink(tmpname).catch(() => undefined)
-
-                if (!this.previewLoopActive) return
-                if (!wc.isDestroyed()) {
-                    // kirim Buffer — Electron structured-clone, TIDAK base64
-                    wc.send('camera:preview-frame', buffer)
-                }
-            } catch {
-                // preview bisa gagal sesaat; lanjut saja
-            }
-
-            if (this.previewLoopActive) {
-                setTimeout(tick, interval)
-            }
-        }
-
-        tick()
-    }
-
-    stopPreviewLoop() {
-        this.previewLoopActive = false
-        this.previewTarget = null
-    }
+  return {
+    name: 'root',
+    label: 'Camera Settings',
+    main: {
+      name: 'main',
+      label: 'Camera',
+      children: {
+        capturesettings: {
+          name: 'capturesettings',
+          label: 'Capture Settings',
+          children: groups.capturesettings,
+        },
+        imgsettings: {
+          name: 'imgsettings',
+          label: 'Image Settings',
+          children: groups.imgsettings,
+        },
+      },
+    },
+  }
 }
 
-/* Export singleton */
+
+  async setConfigValue(key: string, value: string | number): Promise<void> {
+    this.assertConnected()
+    await this.command('set', this.mapProperty(key), String(value))
+  }
+
+  /** Captures the current live-view frame as a JPEG data URL. */
+  async capturePreview(): Promise<string> {
+    this.assertConnected()
+    if (!this.previewStarted) {
+      await this.windowCommand('LiveViewWnd_Show')
+      this.previewStarted = true
+      await new Promise((resolve) => setTimeout(resolve, 300))
+    }
+
+    const buffer = await this.requestBuffer('/liveview.jpg')
+    if (!buffer.length) throw new Error('digiCamControl mengembalikan frame live view kosong.')
+    return `data:image/jpeg;base64,${buffer.toString('base64')}`
+  }
+
+  async captureImage(): Promise<CaptureResult> {
+    this.assertConnected()
+    const targetPath = join(tmpdir(), `capture-${Date.now()}.jpg`)
+    await this.captureToPath(targetPath)
+    try {
+      const buffer = await fs.readFile(targetPath)
+      return { buffer, base64: `data:image/jpeg;base64,${buffer.toString('base64')}` }
+    } finally {
+      await fs.unlink(targetPath).catch(() => undefined)
+    }
+  }
+
+  async captureToFile(sessionId: string): Promise<CaptureFileResult> {
+    this.assertConnected()
+    const dir = join(app.getPath('userData'), 'captures', basename(sessionId))
+    await fs.mkdir(dir, { recursive: true })
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const filename = `capture-${timestamp}.jpg`
+    const targetPath = join(dir, filename)
+    await this.captureToPath(targetPath)
+    return { path: targetPath, filename }
+  }
+
+  async captureToTempFile(): Promise<{ base64: string }> {
+    this.assertConnected()
+    const targetPath = join(tmpdir(), `capture-${Date.now()}.jpg`)
+    await this.captureToPath(targetPath)
+    try {
+      const buffer = await fs.readFile(targetPath)
+      return { base64: `data:image/jpeg;base64,${buffer.toString('base64')}` }
+    } finally {
+      await fs.unlink(targetPath).catch(() => undefined)
+    }
+  }
+
+  /** Sends JPEG Buffer frames on the same IPC channel as the old service. */
+  startPreviewLoop(wc: WebContents, fps = 15): void {
+    if (this.previewLoopActive) return
+    this.previewLoopActive = true
+    this.previewTarget = wc
+    const interval = Math.max(1000 / fps, 100)
+
+    const tick = async (): Promise<void> => {
+      if (!this.previewLoopActive || !this.connected) return
+      if (!this.previewTickInFlight) {
+        this.previewTickInFlight = true
+        try {
+          if (!this.previewStarted) {
+            await this.windowCommand('LiveViewWnd_Show')
+            this.previewStarted = true
+          }
+          const buffer = await this.requestBuffer('/liveview.jpg')
+          const target = this.previewTarget
+          if (buffer.length && target && !target.isDestroyed() && this.previewLoopActive) {
+            target.send('camera:preview-frame', buffer)
+          }
+        } catch (error) {
+          console.warn('[CameraService] Preview frame failed:', error)
+        } finally {
+          this.previewTickInFlight = false
+        }
+      }
+      if (this.previewLoopActive) setTimeout(() => void tick(), interval)
+    }
+
+    void tick()
+  }
+
+  stopPreviewLoop(): void {
+    this.previewLoopActive = false
+    this.previewTarget = null
+    if (this.previewStarted) {
+      void this.windowCommand('LiveViewWnd_Hide')
+        .catch((error) => console.warn('[CameraService] Failed to hide live view:', error))
+        .finally(() => { this.previewStarted = false })
+    }
+  }
+}
+
 export const cameraService = new CameraService()
