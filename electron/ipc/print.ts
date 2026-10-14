@@ -421,6 +421,8 @@ async function printImageWithWindowsHelper(options: {
         : {}),
     };
 
+    console.log("REQUEST PRINT", request)
+
     await writeFile(requestPath, JSON.stringify(request), "utf8");
 
     const helperPath = app.isPackaged
