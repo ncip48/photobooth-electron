@@ -4,10 +4,12 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Printing;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Xml.Linq;
 using SP = System.Printing;
 using SPI = System.Printing.Interop;
 
@@ -338,6 +340,9 @@ internal static class Program
     // PrintTicket route (full driver fidelity)
     // -----------------------------------------------------------------------
 
+    private static readonly XNamespace Psf =
+        "http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework";
+
     private static void ApplyPrintTicket(
         PrinterSettings settings,
         PageSettings page,
@@ -353,15 +358,24 @@ internal static class Program
 
         SP.PrintTicket baseTicket = queue.UserPrintTicket ?? queue.DefaultPrintTicket;
         SP.PrintCapabilities caps = queue.GetPrintCapabilities();
-        SP.PrintTicket delta = new SP.PrintTicket();
 
-        // --- Media type (EPIJ_Medi) ---
-        if (!string.IsNullOrWhiteSpace(media))
+        XDocument ticketDoc = LoadXml(baseTicket.GetXmlStream());
+        XDocument capsDoc = LoadXml(queue.GetPrintCapabilitiesAsXml());
+
+        // 1) Exact driver option names, e.g. "ns0000:EpsonPhotoPaperGlossy", "psk:Borderless",
+        //    "ns0000:HighQuality". They are looked up in the driver's capabilities and written
+        //    straight into the print ticket XML.
+        string? mediaApplied = TrySetOption(ticketDoc, capsDoc, media);
+        string? qualityApplied = TrySetOption(ticketDoc, capsDoc, quality);
+        string? borderApplied = TrySetOption(ticketDoc, capsDoc, border);
+
+        SP.PrintTicket delta = TicketFromXml(ticketDoc);
+
+        // 2) Fallback for plain keywords (e.g. "Plain", "Standard") that are not driver option names.
+        if (mediaApplied == null && !string.IsNullOrWhiteSpace(media))
         {
-            List<SP.PageMediaType> candidates = MapMedia(media!);
             SP.PageMediaType? chosen = null;
-
-            foreach (SP.PageMediaType candidate in candidates)
+            foreach (SP.PageMediaType candidate in MapMedia(media!))
             {
                 if (caps.PageMediaTypeCapability == null ||
                     caps.PageMediaTypeCapability.Count == 0 ||
@@ -382,13 +396,10 @@ internal static class Program
             }
         }
 
-        // --- Quality (EPIJ_Qual) ---
-        if (!string.IsNullOrWhiteSpace(quality))
+        if (qualityApplied == null && !string.IsNullOrWhiteSpace(quality))
         {
-            List<SP.OutputQuality> candidates = MapQuality(quality!);
             SP.OutputQuality? chosen = null;
-
-            foreach (SP.OutputQuality candidate in candidates)
+            foreach (SP.OutputQuality candidate in MapQuality(quality!))
             {
                 if (caps.OutputQualityCapability == null ||
                     caps.OutputQualityCapability.Count == 0 ||
@@ -409,8 +420,7 @@ internal static class Program
             }
         }
 
-        // --- Borderless (EPIJ_Bdls) ---
-        if (!string.IsNullOrWhiteSpace(border))
+        if (borderApplied == null && !string.IsNullOrWhiteSpace(border))
         {
             bool wantBorderless = border!.IndexOf("Borderless", StringComparison.OrdinalIgnoreCase) >= 0;
             SP.PageBorderless wanted = wantBorderless ? SP.PageBorderless.Borderless : SP.PageBorderless.None;
@@ -427,7 +437,7 @@ internal static class Program
             }
         }
 
-        // --- Page size (PageSize in microns -> 1/96 inch units) ---
+        // 3) Page size (microns -> 1/96 inch units)
         if (size != null)
         {
             double w96 = size.WidthMicrons / 25400.0 * 96.0;
@@ -458,19 +468,162 @@ internal static class Program
             delta.PageMediaSize = bestSize ?? new SP.PageMediaSize(w96, h96);
         }
 
-        // Merge our changes onto the user's defaults and let the driver validate them.
+        // 4) Let the driver validate the result, then report what it actually accepted.
         SP.PrintTicket validated = queue.MergeAndValidatePrintTicket(baseTicket, delta).ValidatedPrintTicket;
+        XDocument validatedDoc = LoadXml(validated.GetXmlStream());
 
-        notes.Add("media=" + validated.PageMediaType +
-                  ", kualitas=" + validated.OutputQuality +
-                  ", border=" + validated.PageBorderless);
+        ReportOption(notes, "media", mediaApplied, validatedDoc);
+        ReportOption(notes, "kualitas", qualityApplied, validatedDoc);
+        ReportOption(notes, "border", borderApplied, validatedDoc);
 
-        // PrintTicket -> DEVMODE (includes the Epson private driver data)
+        // 5) PrintTicket -> DEVMODE (includes the Epson private driver data)
         using SPI.PrintTicketConverter converter =
             new SPI.PrintTicketConverter(printerName, SPI.PrintTicketConverter.MaxPrintSchemaVersion);
         byte[] devMode = converter.ConvertPrintTicketToDevMode(validated, SPI.BaseDevModeType.UserDefault);
 
         LoadDevMode(settings, page, devMode);
+    }
+
+    private static XDocument LoadXml(MemoryStream stream)
+    {
+        using (stream)
+        {
+            stream.Position = 0;
+            return XDocument.Load(stream);
+        }
+    }
+
+    private static SP.PrintTicket TicketFromXml(XDocument document)
+    {
+        using MemoryStream stream = new MemoryStream();
+        document.Save(stream);
+        stream.Position = 0;
+        return new SP.PrintTicket(stream);
+    }
+
+    private static string LocalName(string name)
+    {
+        int index = name.IndexOf(':');
+        return index >= 0 ? name.Substring(index + 1) : name;
+    }
+
+    /// <summary>
+    /// Finds the option named <paramref name="value"/> in the driver capabilities, locates its
+    /// feature (e.g. psk:PageMediaType) and writes that option into the print ticket.
+    /// Returns the option name written, or null when the driver has no such option.
+    /// </summary>
+    private static string? TrySetOption(XDocument ticketDoc, XDocument capsDoc, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        XElement? capsRoot = capsDoc.Root;
+        XElement? ticketRoot = ticketDoc.Root;
+        if (capsRoot == null || ticketRoot == null)
+        {
+            return null;
+        }
+
+        string wanted = value!.Trim();
+        string wantedLocal = LocalName(wanted);
+
+        XElement? exact = null;
+        XElement? byLocal = null;
+        int localCount = 0;
+
+        foreach (XElement candidate in capsDoc.Descendants(Psf + "Option"))
+        {
+            string? name = (string?)candidate.Attribute("name");
+            if (name == null)
+            {
+                continue;
+            }
+
+            if (string.Equals(name, wanted, StringComparison.OrdinalIgnoreCase))
+            {
+                exact = candidate;
+                break;
+            }
+
+            if (string.Equals(LocalName(name), wantedLocal, StringComparison.OrdinalIgnoreCase))
+            {
+                byLocal = candidate;
+                localCount++;
+            }
+        }
+
+        XElement? chosen = exact ?? (localCount == 1 ? byLocal : null);
+        if (chosen == null)
+        {
+            return null;
+        }
+
+        XElement? capsFeature = chosen.Ancestors(Psf + "Feature").FirstOrDefault();
+        string? featureName = capsFeature == null ? null : (string?)capsFeature.Attribute("name");
+        string? optionName = (string?)chosen.Attribute("name");
+        if (capsFeature == null || featureName == null || optionName == null)
+        {
+            return null;
+        }
+
+        // Make sure prefixes such as ns0000 are declared on the ticket root.
+        foreach (XAttribute declaration in capsRoot.Attributes())
+        {
+            if (declaration.IsNamespaceDeclaration &&
+                declaration.Name.Namespace == XNamespace.Xmlns &&
+                ticketRoot.Attribute(declaration.Name) == null)
+            {
+                ticketRoot.SetAttributeValue(declaration.Name, declaration.Value);
+            }
+        }
+
+        XElement? feature = null;
+        foreach (XElement candidate in ticketDoc.Descendants(Psf + "Feature"))
+        {
+            if (string.Equals((string?)candidate.Attribute("name"), featureName, StringComparison.Ordinal))
+            {
+                feature = candidate;
+                break;
+            }
+        }
+
+        if (feature == null)
+        {
+            if (!ReferenceEquals(capsFeature.Parent, capsRoot))
+            {
+                return null; // nested feature that is not present in the ticket; skip
+            }
+
+            feature = new XElement(Psf + "Feature", new XAttribute("name", featureName));
+            ticketRoot.Add(feature);
+        }
+
+        feature.RemoveNodes();
+        feature.Add(new XElement(Psf + "Option", new XAttribute("name", optionName)));
+
+        return optionName;
+    }
+
+    private static void ReportOption(List<string> notes, string label, string? applied, XDocument validatedDoc)
+    {
+        if (applied == null)
+        {
+            return;
+        }
+
+        bool accepted = false;
+        foreach (XElement option in validatedDoc.Descendants(Psf + "Option"))
+        {
+            if (string.Equals((string?)option.Attribute("name"), applied, StringComparison.OrdinalIgnoreCase))
+            {
+                accepted = true;
+                break;
+            }
+        }
+
+        notes.Add(label + "=" + applied + (accepted ? "" : " (ditolak driver)"));
     }
 
     private static void LoadDevMode(PrinterSettings settings, PageSettings page, byte[] devMode)
