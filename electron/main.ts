@@ -7,11 +7,12 @@ let mainWindow: BrowserWindow | null = null
 
 function createWindow(): void {
     mainWindow = new BrowserWindow({
-        width: 1280,
-        height: 800,
-        minWidth: 1024,
-        minHeight: 720,
+        // width: 1280,
+        // height: 800,
+        // minWidth: 1024,
+        // minHeight: 720,
         show: false,
+        kiosk: true,
         autoHideMenuBar: true,
         backgroundColor: '#20201e',
         webPreferences: {

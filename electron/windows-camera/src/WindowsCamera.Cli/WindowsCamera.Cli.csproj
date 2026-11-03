@@ -1,0 +1,61 @@
+﻿
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <AssemblyName>WindowsCamera</AssemblyName>
+    <RootNamespace>WindowsCamera.Cli</RootNamespace>
+
+    <Platforms>x86</Platforms>
+    <PlatformTarget>x86</PlatformTarget>
+    <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="CameraControl.Devices">
+      <HintPath>lib\CameraControl.Devices.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+
+    <Reference Include="CameraControl.Core">
+      <HintPath>lib\CameraControl.Core.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+
+    <Reference Include="Canon.Eos.Framework">
+      <HintPath>lib\Canon.Eos.Framework.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+
+    <Reference Include="PortableDeviceLib">
+      <HintPath>lib\PortableDeviceLib.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Accord.Video" Version="3.8.2-alpha" />
+    <PackageReference Include="Accord.Video.DirectShow" Version="3.8.2-alpha" />
+    <PackageReference Include="System.Management" Version="8.0.0" />
+
+    <!-- SQLite native runtime -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3"
+                      Version="2.1.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Interop.PortableDeviceApiLib.dll"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Interop.PortableDeviceTypesLib.dll"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="log4net.dll"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="EDSDK.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('EDSDK.dll')" />
+  </ItemGroup>
+</Project>

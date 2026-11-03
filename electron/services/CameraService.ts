@@ -1,517 +1,624 @@
-import { promises as fs } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
-import { spawn } from 'node:child_process'
-import { app, type WebContents } from 'electron'
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { accessSync, promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
+import { app, type WebContents } from "electron";
+import { createInterface } from "node:readline";
 
-type CameraInfo = { model: string; port?: string }
-type CaptureResult = { base64: string; buffer: Buffer }
-type CaptureFileResult = { path: string; filename: string }
-type SettingNode = {
-  name: string
-  label: string
-  value: string
-  choices: string[]
-  readonly: boolean
-  type: 'text' | 'menu'
-  children: SettingNode[]
+type CameraInfo = { model: string; port?: string };
+type CaptureResult = { base64: string; buffer: Buffer };
+type CaptureFileResult = { path: string; filename: string };
+
+type SessionResponse<T = unknown> = {
+  id: number;
+  ok: boolean;
+  result?: T;
+  error?: string;
+};
+
+type PendingRequest = {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+/** Resolved once, at first use. */
+let exePathCache: string | null = null;
+
+function resolveExe(): string {
+  if (exePathCache) return exePathCache;
+
+  const candidates = app.isPackaged
+    ? [
+        join(process.resourcesPath, "windows-camera", "WindowsCamera.exe"),
+        join(process.resourcesPath, "WindowsCamera.exe"),
+      ]
+    : [
+        join(
+          app.getAppPath(),
+          "electron",
+          "windows-camera",
+          "src",
+          "WindowsCamera.Cli",
+          "bin",
+          "Debug",
+          "net8.0-windows",
+          "win-x86",
+          "WindowsCamera.exe",
+        ),
+        join(
+          app.getAppPath(),
+          "electron",
+          "windows-camera",
+          "src",
+          "WindowsCamera.Cli",
+          "bin",
+          "Debug",
+          "net8.0-windows",
+          "WindowsCamera.exe",
+        ),
+      ];
+
+  if (process.env.WINDOWS_CAMERA_EXE) {
+    exePathCache = process.env.WINDOWS_CAMERA_EXE;
+    return exePathCache;
+  }
+
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate);
+      exePathCache = candidate;
+      return candidate;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  throw new Error(
+    `WindowsCamera.exe not found. Looked in:\n${candidates.join("\n")}\n` +
+      "Set WINDOWS_CAMERA_EXE to override.",
+  );
 }
 
-const DEFAULT_DCC_URL = 'http://127.0.0.1:5513'
+function outputPath(result: unknown, fallback: string): string {
+  if (typeof result === "string") return result;
+  if (
+    result !== null &&
+    typeof result === "object" &&
+    "path" in result &&
+    typeof result.path === "string"
+  ) {
+    return result.path;
+  }
+  return fallback;
+}
 
-/**
- * digiCamControl-backed CameraService.
- *
- * Run Electron on Windows, start digiCamControl, and enable:
- * Settings -> Webserver -> Use web server.
- *
- * DCC owns the physical USB connection. disconnect() clears this service's
- * selection and stops live view; it does not close DCC or release its USB handle.
- */
 class CameraService {
-  private readonly baseUrl: string
-  private connected = false
-  private connectedModel: string | null = null
-  private connectedSerial: string | null = null
-  private connectedIndex = -1
-  private previewStarted = false
-  private previewLoopActive = false
-  private previewTarget: WebContents | null = null
-  private previewTickInFlight = false
-  private listInFlight: Promise<CameraInfo[]> | null = null
-  private connectInFlight: Promise<{ model: string }> | null = null
-  private disconnectInFlight: Promise<void> | null = null
+  private connectedIndex = -1;
+  private connectedModel: string | null = null;
+  private previewLoopActive = false;
+  private previewTarget: WebContents | null = null;
+  private previewTickInFlight = false;
+  private listInFlight: Promise<CameraInfo[]> | null = null;
+  private connectInFlight: Promise<{ model: string }> | null = null;
 
-  constructor() {
-    this.baseUrl = (process.env.DIGICAMCONTROL_URL || DEFAULT_DCC_URL).replace(/\/+$/, '')
-    console.log('[CameraService] digiCamControl URL:', this.baseUrl)
+  private session: ChildProcessWithoutNullStreams | null = null;
+  private sessionLines: ReturnType<typeof createInterface> | null = null;
+  private nextRequestId = 1;
+  private readonly pending = new Map<number, PendingRequest>();
+  private sessionStart: Promise<void> | null = null;
+  private commandQueue: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Start one long-lived WindowsCamera.exe process. The C# CLI must support
+   * `--session` and JSON-lines requests on stdin/stdout.
+   */
+  private async ensureSession(): Promise<void> {
+    if (this.session && this.session.exitCode === null && !this.session.killed)
+      return;
+    if (this.sessionStart) return this.sessionStart;
+
+    const operation = (async () => {
+      const exe = resolveExe();
+      const child = spawn(exe, ["--session"], {
+        windowsHide: true,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      this.session = child;
+      const lines = createInterface({ input: child.stdout });
+      this.sessionLines = lines;
+
+      lines.on("line", (line) => {
+        const text = line.trim();
+        if (!text) return;
+
+        let response: SessionResponse;
+        try {
+          response = JSON.parse(text) as SessionResponse;
+        } catch {
+          console.warn(
+            "[CameraService] Ignoring non-JSON session output:",
+            text,
+          );
+          return;
+        }
+
+        const pending = this.pending.get(response.id);
+        if (!pending) {
+          console.warn(
+            "[CameraService] Received response for unknown request:",
+            response.id,
+          );
+          return;
+        }
+
+        clearTimeout(pending.timer);
+        this.pending.delete(response.id);
+
+        if (response.ok) {
+          pending.resolve(response.result);
+        } else {
+          pending.reject(
+            new Error(
+              response.error || "WindowsCamera session command failed.",
+            ),
+          );
+        }
+      });
+
+      child.stderr.on("data", (chunk: Buffer) => {
+        const message = chunk.toString("utf8").trim();
+        if (message) console.warn("[WindowsCamera]", message);
+      });
+
+      child.on("error", (error) => {
+        this.rejectAllPending(
+          new Error(`Failed to launch WindowsCamera.exe: ${error.message}`),
+        );
+        if (this.session === child) {
+          this.session = null;
+          this.sessionLines = null;
+        }
+      });
+
+      child.on("close", (code, signal) => {
+        const error = new Error(
+          `WindowsCamera session exited (code ${code ?? "null"}${signal ? `, signal ${signal}` : ""}).`,
+        );
+        this.rejectAllPending(error);
+        lines.close();
+        if (this.session === child) {
+          this.session = null;
+          this.sessionLines = null;
+          this.connectedIndex = -1;
+          this.connectedModel = null;
+        }
+      });
+
+      // Give Node a turn to deliver immediate spawn errors before commands are sent.
+      await new Promise<void>((resolve, reject) => {
+        const onSpawn = () => {
+          cleanup();
+          resolve();
+        };
+        const onError = (error: Error) => {
+          cleanup();
+          reject(
+            new Error(`Failed to launch WindowsCamera.exe: ${error.message}`),
+          );
+        };
+        const cleanup = () => {
+          child.off("spawn", onSpawn);
+          child.off("error", onError);
+        };
+        child.once("spawn", onSpawn);
+        child.once("error", onError);
+      });
+    })();
+
+    this.sessionStart = operation;
+    try {
+      await operation;
+    } finally {
+      if (this.sessionStart === operation) this.sessionStart = null;
+    }
+  }
+
+  private rejectAllPending(error: Error): void {
+    for (const [id, request] of this.pending) {
+      clearTimeout(request.timer);
+      request.reject(error);
+      this.pending.delete(id);
+    }
   }
 
   /**
-   * Requests a raw response body using Windows curl.exe.
-   *
-   * digiCamControl's Griffin.Networking webserver sends duplicate
-   * Content-Length headers. Node's fetch()/http parser rejects that response,
-   * while curl.exe can read it. This method intentionally captures only the
-   * response body (not headers), so it also works for JPEG live-view frames.
+   * Send one command to the persistent C# session. Commands are serialized so
+   * capture, settings changes, and live view don't overlap on the camera.
    */
-  private requestBuffer(path: string, timeoutMs = 15_000): Promise<Buffer> {
-    const url = new URL(path, `${this.baseUrl}/`).toString()
-
-    return new Promise<Buffer>((resolve, reject) => {
-      const stdoutChunks: Buffer[] = []
-      const stderrChunks: Buffer[] = []
-      let settled = false
-      let timer: ReturnType<typeof setTimeout> | undefined
-
-      const finish = (error?: Error, result?: Buffer): void => {
-        if (settled) return
-        settled = true
-        if (timer) clearTimeout(timer)
-
-        if (error) reject(error)
-        else resolve(result ?? Buffer.alloc(0))
+  private command<T>(
+    action: string,
+    fields: Record<string, unknown> = {},
+    timeoutMs = 180_000,
+  ): Promise<T> {
+    const runCommand = async (): Promise<T> => {
+      await this.ensureSession();
+      const child = this.session;
+      if (!child || !child.stdin.writable) {
+        throw new Error("WindowsCamera session is not available.");
       }
 
-      const child = spawn(
-        'curl.exe',
-        [
-          '--silent',
-          '--show-error',
-          '--fail',
-          '--max-time',
-          String(Math.max(1, Math.ceil(timeoutMs / 1000))),
-          url,
-        ],
-        {
-          windowsHide: true,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        },
-      )
+      const id = String(++this.nextRequestId);
+      const payload = JSON.stringify({
+        id,
+        action,
+        ...fields,
+        timeoutSeconds: Math.max(1, Math.ceil(timeoutMs / 1000)),
+      });
 
-      timer = setTimeout(() => {
-        child.kill()
-        finish(new Error(`Timeout menghubungi digiCamControl di ${this.baseUrl}.`))
-      }, timeoutMs + 1_000)
-
-      child.stdout.on('data', (chunk: Buffer) => {
-        stdoutChunks.push(Buffer.from(chunk))
-      })
-
-      child.stderr.on('data', (chunk: Buffer) => {
-        stderrChunks.push(Buffer.from(chunk))
-      })
-
-      child.on('error', (error) => {
-        finish(
-          new Error(
-            `Gagal menjalankan curl.exe. Pastikan curl tersedia di Windows PATH. Detail: ${error.message}`,
-          ),
-        )
-      })
-
-      child.on('close', (code) => {
-        if (settled) return
-
-        if (code !== 0) {
-          const detail = Buffer.concat(stderrChunks).toString('utf8').trim()
-          finish(
+      const response = new Promise<unknown>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(
             new Error(
-              `Request digiCamControl gagal (curl exit ${code}): ${detail || 'Tidak ada detail error.'}`,
+              `WindowsCamera ${action} timed out after ${timeoutMs}ms.`,
             ),
-          )
-          return
-        }
+          );
+        }, timeoutMs);
 
-        finish(undefined, Buffer.concat(stdoutChunks))
-      })
-    })
+        this.pending.set(id, { resolve, reject, timer });
+        child.stdin.write(`${payload}\n`, (error) => {
+          if (!error) return;
+          const pending = this.pending.get(id);
+          if (!pending) return;
+          clearTimeout(pending.timer);
+          this.pending.delete(id);
+          pending.reject(
+            new Error(
+              `Failed to write to WindowsCamera session: ${error.message}`,
+            ),
+          );
+        });
+      });
+
+      return (await response) as T;
+    };
+
+    const operation = this.commandQueue.then(runCommand, runCommand);
+    this.commandQueue = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
   }
 
-  private async requestText(path: string, timeoutMs = 15_000): Promise<string> {
-    const body = (await this.requestBuffer(path, timeoutMs)).toString('utf8').trim()
-
-    if (/^\s*(error|exception)\s*[:\-]/i.test(body)) {
-      throw new Error(`digiCamControl: ${body}`)
-    }
-
-    return body
-  }
-
-  private command(command: string, param1 = '', param2 = '', timeoutMs = 15_000): Promise<string> {
-    const query = new URLSearchParams({ slc: command, param1, param2 })
-    return this.requestText(`/?${query.toString()}`, timeoutMs)
-  }
-
-  private windowCommand(command: string): Promise<string> {
-    return this.requestText(`/?${new URLSearchParams({ CMD: command })}`)
-  }
-
-  private parseList(raw: string): string[] {
-    return raw.split(/\r?\n/)
-      .map((line) => line.trim().replace(/^[-*]\s*/, ''))
-      .filter(Boolean)
-      .filter((line) => !/^(ok|success|cameras?|serials?)\s*:?\s*$/i.test(line))
-      .filter((line) => !/^(error|exception)\b/i.test(line))
-  }
-
-  private assertConnected(): void {
-    if (!this.connected || !this.connectedSerial) throw new Error('Camera not connected.')
-  }
-
-  private mapProperty(key: string): string {
-    const last = key.split('/').filter(Boolean).pop()?.toLowerCase().replace(/[^a-z0-9]/g, '') ?? ''
-    const aliases: Record<string, string> = {
-      iso: 'iso',
-      isonumber: 'iso',
-      aperture: 'aperture',
-      fnumber: 'aperture',
-      shutterspeed: 'shutterspeed',
-      shutter: 'shutterspeed',
-      exposurecompensation: 'exposurecompensation',
-      exposurecomp: 'exposurecompensation',
-      focusmode: 'focusmode',
-      whitebalance: 'whitebalance',
-      mode: 'mode',
-      cameramode: 'mode',
-      compressionsetting: 'compressionsetting',
-      imagequality: 'compressionsetting',
-    }
-    const property = aliases[last]
-    if (!property) throw new Error(`Pengaturan "${key}" belum dipetakan ke properti digiCamControl.`)
-    return property
-  }
-
-  private async getProperty(property: string): Promise<string> {
-    return this.command('get', property, '')
-  }
-
-  private async getChoices(property: string): Promise<string[]> {
-    try {
-      // DCC expects list&param1=iso, not list&param1=camera.iso.
-      return this.parseList(await this.command('list', property, ''))
-    } catch (error) {
-      console.warn(`[CameraService] Pilihan ${property} tidak tersedia:`, error)
-      return []
-    }
-  }
-
-  private async getCameraModel(serial: string): Promise<string> {
-    // DCC's list cameras command returns serial numbers. Select that camera,
-    // then query its device name for a human-readable model.
-    await this.command('set', 'camera', serial)
-    try {
-      const name = await this.command('get', 'property.devicename', '')
-      const cleaned = name.trim()
-      if (cleaned) {
-        // DCC may return e.g. "Canon EOS 550D (1132568580)".
-        return cleaned
-  .replace(`(${serial})`, '')
-  .trim() || cleaned
-      }
-    } catch (error) {
-      console.warn(`[CameraService] Nama kamera untuk ${serial} tidak tersedia:`, error)
-    }
-    return serial
-  }
-
-  private async captureToPath(targetPath: string): Promise<void> {
-    await fs.mkdir(join(targetPath, '..'), { recursive: true })
-    await this.command('capture', targetPath, '', 120_000)
-
-    // Allow a short delay for the camera/driver to flush the file to disk.
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      try {
-        const stat = await fs.stat(targetPath)
-        if (stat.isFile() && stat.size > 0) return
-      } catch {
-        // File may not have appeared yet.
-      }
-      await new Promise((resolve) => setTimeout(resolve, 200))
-    }
-    throw new Error(
-      `File hasil capture tidak ditemukan: ${targetPath}. Periksa mode transfer dan session digiCamControl.`,
-    )
-  }
-
-  /** Returns camera identifiers exposed by DCC's "list cameras" command. */
   async list(): Promise<CameraInfo[]> {
-    if (this.connected && this.connectedSerial) {
-      return [{ model: this.connectedModel ?? this.connectedSerial, port: this.connectedSerial }]
-    }
-    if (this.listInFlight) return this.listInFlight
+    if (this.listInFlight) return this.listInFlight;
 
-    const operation = (async () => {
-      const serials = this.parseList(await this.command('list', 'cameras', ''))
-      const cameras: CameraInfo[] = []
-      for (const serial of serials) {
-        const model = await this.getCameraModel(serial)
-        cameras.push({ model, port: serial })
-      }
-      return cameras
-    })()
+    const operation = this.command<
+      Array<{ index: number; model: string; port?: string }>
+    >("list")
+      .then((rows) => rows.map((row) => ({ model: row.model, port: row.port })))
+      .catch((error: Error) => {
+        if (/No camera found/i.test(error.message)) return [];
+        throw error;
+      });
 
-    this.listInFlight = operation
+    this.listInFlight = operation;
     try {
-      return await operation
+      return await operation;
     } finally {
-      if (this.listInFlight === operation) this.listInFlight = null
+      if (this.listInFlight === operation) this.listInFlight = null;
     }
   }
 
-  /** Selects a camera already connected to digiCamControl. */
   async connect(index = 0): Promise<{ model: string }> {
-    if (this.connected && this.connectedIndex === index && this.connectedModel) {
-      return { model: this.connectedModel }
+    if (this.connectedIndex === index && this.connectedModel && this.session) {
+      return { model: this.connectedModel };
     }
-    if (this.connected) {
-      throw new Error(`Camera index ${index} requested but index ${this.connectedIndex} is selected. Disconnect first.`)
-    }
-    if (this.disconnectInFlight) await this.disconnectInFlight
-    if (this.connectInFlight) return this.connectInFlight
+    if (this.connectInFlight) return this.connectInFlight;
 
     const operation = (async () => {
-      const cameras = await this.list()
-      const camera = cameras[index]
+      const cameras = await this.list();
+      const camera = cameras[index];
       if (!camera) {
-        throw new Error(cameras.length
-          ? `Camera at index ${index} not found.`
-          : 'No camera found. Pastikan Canon terdeteksi di aplikasi digiCamControl.')
+        throw new Error(
+          cameras.length
+            ? `Camera at index ${index} not found.`
+            : "No camera found. Pastikan kamera terdeteksi.",
+        );
       }
 
-      const serial = camera.port ?? camera.model
-      await this.command('set', 'camera', serial)
-      this.connected = true
-      this.connectedSerial = serial
-      this.connectedModel = camera.model
-      this.connectedIndex = index
-      return { model: camera.model }
-    })()
+      const status = await this.command<{
+        camera?: { connected?: boolean; model?: string };
+        connected?: boolean;
+        model?: string;
+      }>("status", { index });
 
-    this.connectInFlight = operation
+      const cameraStatus = status.camera ?? status;
+      if (!cameraStatus.connected) {
+        throw new Error("Camera selected but not connected.");
+      }
+
+      this.connectedIndex = index;
+      this.connectedModel = cameraStatus.model || camera.model;
+      return { model: this.connectedModel };
+    })();
+
+    this.connectInFlight = operation;
     try {
-      return await operation
+      return await operation;
     } finally {
-      if (this.connectInFlight === operation) this.connectInFlight = null
+      if (this.connectInFlight === operation) this.connectInFlight = null;
     }
   }
 
   async disconnect(): Promise<void> {
-    if (this.disconnectInFlight) return this.disconnectInFlight
-    const operation = (async () => {
-      this.previewLoopActive = false
-      this.previewTarget = null
-      if (this.previewStarted) {
-        try {
-          await this.windowCommand('LiveViewWnd_Hide')
-        } catch (error) {
-          console.warn('[CameraService] Failed to stop DCC live view:', error)
-        }
-      }
-      this.previewStarted = false
-      this.connected = false
-      this.connectedModel = null
-      this.connectedSerial = null
-      this.connectedIndex = -1
-    })()
+    this.stopPreviewLoop();
 
-    this.disconnectInFlight = operation
-    try {
-      await operation
-    } finally {
-      if (this.disconnectInFlight === operation) this.disconnectInFlight = null
+    const child = this.session;
+    if (child && child.exitCode === null && !child.killed) {
+      try {
+        await this.command<unknown>("shutdown", {}, 10_000);
+      } catch (error) {
+        console.warn("[CameraService] Session shutdown failed:", error);
+      }
+
+      // Give the CLI time to leave the session loop and dispose CameraService
+      // (which closes the native camera manager) before forcing process exit.
+      if (child.exitCode === null && !child.killed) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => {
+            child.off("close", onClose);
+            resolve();
+          }, 2_000);
+          const onClose = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+          child.once("close", onClose);
+        });
+      }
+
+      // Last resort only: don't leave a stuck native camera process behind.
+      if (child.exitCode === null && !child.killed) {
+        child.kill();
+      }
     }
+
+    this.connectedIndex = -1;
+    this.connectedModel = null;
   }
 
   getStatus(): { connected: boolean; model: string | null } {
-    return { connected: this.connected, model: this.connectedModel }
+    return { connected: this.connectedIndex >= 0, model: this.connectedModel };
   }
 
-  /**
-   * Returns a normalized settings tree with children/value/choices fields.
-   * It is not identical to libgphoto2's config tree; renderer code that depends
-   * on gphoto2-specific node fields may need a small adapter.
-   */
-  
-async getConfig(): Promise<any> {
-  this.assertConnected()
-
-  const definitions = [
-    {
-      name: 'aperture',
-      label: 'Aperture',
-      group: 'capturesettings',
-      property: 'aperture',
-    },
-    {
-      name: 'shutterspeed',
-      label: 'Shutter Speed',
-      group: 'capturesettings',
-      property: 'shutterspeed',
-    },
-    {
-      name: 'iso',
-      label: 'ISO',
-      group: 'imgsettings',
-      property: 'iso',
-    },
-    {
-      name: 'whitebalance',
-      label: 'White Balance',
-      group: 'imgsettings',
-      property: 'whitebalance',
-    },
-  ] as const
-
-  const groups: Record<string, Record<string, any>> = {
-    capturesettings: {},
-    imgsettings: {},
+  private assertConnected(): void {
+    if (this.connectedIndex < 0) throw new Error("Camera not connected.");
   }
 
-  for (const definition of definitions) {
-    try {
-      const [value, choices] = await Promise.all([
-        this.getProperty(definition.property),
-        this.getChoices(definition.property),
-      ])
+  async getConfig(): Promise<any> {
+    this.assertConnected();
 
-      groups[definition.group][definition.name] = {
-        name: definition.name,
-        label: definition.label,
-        value,
-        choices,
-        readonly: false,
-        type: choices.length ? 'menu' : 'text',
-        children: [],
-      }
-    } catch (error) {
-      console.warn(
-        `[CameraService] Gagal membaca ${definition.name}:`,
-        error,
-      )
+    const status = await this.command<{
+      camera?: {
+        connected?: boolean;
+        model?: string;
+        port?: string;
+      };
+      config?: {
+        name: string;
+        label: string;
+        main: {
+          name: string;
+          label: string;
+          children: Record<string, unknown>;
+        };
+      };
+    }>("status", { index: this.connectedIndex });
+
+    if (!status.config) {
+      throw new Error("Camera status did not include configuration settings.");
     }
-  }
 
-  return {
-    name: 'root',
-    label: 'Camera Settings',
-    main: {
-      name: 'main',
-      label: 'Camera',
-      children: {
-        capturesettings: {
-          name: 'capturesettings',
-          label: 'Capture Settings',
-          children: groups.capturesettings,
-        },
-        imgsettings: {
-          name: 'imgsettings',
-          label: 'Image Settings',
-          children: groups.imgsettings,
-        },
-      },
-    },
+    return status.config;
   }
-}
-
 
   async setConfigValue(key: string, value: string | number): Promise<void> {
-    this.assertConnected()
-    await this.command('set', this.mapProperty(key), String(value))
+    this.assertConnected();
+    await this.command<unknown>(
+      "set",
+      { index: this.connectedIndex, key, value: String(value) },
+      30_000,
+    );
   }
 
-  /** Captures the current live-view frame as a JPEG data URL. */
   async capturePreview(): Promise<string> {
-    this.assertConnected()
-    if (!this.previewStarted) {
-      await this.windowCommand('LiveViewWnd_Show')
-      this.previewStarted = true
-      await new Promise((resolve) => setTimeout(resolve, 300))
-    }
-
-    const buffer = await this.requestBuffer('/liveview.jpg')
-    if (!buffer.length) throw new Error('digiCamControl mengembalikan frame live view kosong.')
-    return `data:image/jpeg;base64,${buffer.toString('base64')}`
-  }
-
-  async captureImage(): Promise<CaptureResult> {
-    this.assertConnected()
-    const targetPath = join(tmpdir(), `capture-${Date.now()}.jpg`)
-    await this.captureToPath(targetPath)
+    this.assertConnected();
+    const target = join(
+      tmpdir(),
+      `liveview-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`,
+    );
     try {
-      const buffer = await fs.readFile(targetPath)
-      return { buffer, base64: `data:image/jpeg;base64,${buffer.toString('base64')}` }
+      const result = await this.command<unknown>(
+        "liveview",
+        { index: this.connectedIndex, out: target },
+        20_000,
+      );
+      const actualPath = outputPath(result, target);
+      const buffer = await fs.readFile(actualPath);
+      return `data:image/jpeg;base64,${buffer.toString("base64")}`;
     } finally {
-      await fs.unlink(targetPath).catch(() => undefined)
+      await fs.unlink(target).catch(() => undefined);
     }
   }
 
-  async captureToFile(sessionId: string): Promise<CaptureFileResult> {
-    this.assertConnected()
-    const dir = join(app.getPath('userData'), 'captures', basename(sessionId))
-    await fs.mkdir(dir, { recursive: true })
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const filename = `capture-${timestamp}.jpg`
-    const targetPath = join(dir, filename)
-    await this.captureToPath(targetPath)
-    return { path: targetPath, filename }
+  private async captureToTarget(
+    targetPath: string,
+    sets: Array<[string, string]> = [],
+  ): Promise<void> {
+    await this.command<unknown>(
+      "capture",
+      {
+        index: this.connectedIndex,
+        out: targetPath,
+        sets: sets.map(([key, value]) => `${key}=${value}`),
+      },
+      180_000,
+    );
   }
 
-  async captureToTempFile(): Promise<{ base64: string }> {
-    this.assertConnected()
-    const targetPath = join(tmpdir(), `capture-${Date.now()}.jpg`)
-    await this.captureToPath(targetPath)
+  async captureImage(
+    sets: Array<[string, string]> = [],
+  ): Promise<CaptureResult> {
+    this.assertConnected();
+    const targetPath = join(
+      tmpdir(),
+      `capture-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`,
+    );
+    await this.captureToTarget(targetPath, sets);
     try {
-      const buffer = await fs.readFile(targetPath)
-      return { base64: `data:image/jpeg;base64,${buffer.toString('base64')}` }
+      const buffer = await fs.readFile(targetPath);
+      return {
+        buffer,
+        base64: `data:image/jpeg;base64,${buffer.toString("base64")}`,
+      };
     } finally {
-      await fs.unlink(targetPath).catch(() => undefined)
+      await fs.unlink(targetPath).catch(() => undefined);
     }
   }
 
-  /** Sends JPEG Buffer frames on the same IPC channel as the old service. */
-  startPreviewLoop(wc: WebContents, fps = 15): void {
-    if (this.previewLoopActive) return
-    this.previewLoopActive = true
-    this.previewTarget = wc
-    const interval = Math.max(1000 / fps, 100)
+  async captureToFile(
+    sessionId: string,
+    sets: Array<[string, string]> = [],
+  ): Promise<CaptureFileResult> {
+    this.assertConnected();
+    const dir = join(app.getPath("userData"), "captures", basename(sessionId));
+    await fs.mkdir(dir, { recursive: true });
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `capture-${timestamp}.jpg`;
+    const targetPath = join(dir, filename);
+    await this.captureToTarget(targetPath, sets);
+    return { path: targetPath, filename };
+  }
+
+  async captureToTempFile(
+    sets: Array<[string, string]> = [],
+  ): Promise<{ base64: string }> {
+    this.assertConnected();
+    const targetPath = join(
+      tmpdir(),
+      `capture-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`,
+    );
+    await this.captureToTarget(targetPath, sets);
+    try {
+      const buffer = await fs.readFile(targetPath);
+      return { base64: `data:image/jpeg;base64,${buffer.toString("base64")}` };
+    } finally {
+      await fs.unlink(targetPath).catch(() => undefined);
+    }
+  }
+
+  /** Send preview frames over the existing IPC channel. */
+  startPreviewLoop(wc: WebContents, fps = 5): void {
+    if (this.previewLoopActive) return;
+
+    this.previewLoopActive = true;
+    this.previewTarget = wc;
+
+    const interval = Math.max(1000 / fps, 100);
+    const cameraIndex = this.connectedIndex;
 
     const tick = async (): Promise<void> => {
-      if (!this.previewLoopActive || !this.connected) return
+      if (!this.previewLoopActive || this.connectedIndex < 0) return;
+
       if (!this.previewTickInFlight) {
-        this.previewTickInFlight = true
+        this.previewTickInFlight = true;
+
+        const target = join(
+          tmpdir(),
+          `live-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`,
+        );
+
         try {
-          if (!this.previewStarted) {
-            await this.windowCommand('LiveViewWnd_Show')
-            this.previewStarted = true
-          }
-          const buffer = await this.requestBuffer('/liveview.jpg')
-          const target = this.previewTarget
-          if (buffer.length && target && !target.isDestroyed() && this.previewLoopActive) {
-            target.send('camera:preview-frame', buffer)
+          const result = await this.command<unknown>(
+            "liveview",
+            { index: cameraIndex, out: target },
+            20_000,
+          );
+
+          const actualPath = outputPath(result, target);
+          const buffer = await fs.readFile(actualPath);
+
+          const dest = this.previewTarget;
+
+          if (
+            buffer.length &&
+            dest &&
+            !dest.isDestroyed() &&
+            this.previewLoopActive
+          ) {
+            dest.send("camera:preview-frame", buffer);
           }
         } catch (error) {
-          console.warn('[CameraService] Preview frame failed:', error)
+          if (this.previewLoopActive) {
+            console.warn("[CameraService] Preview frame failed:", error);
+          }
         } finally {
-          this.previewTickInFlight = false
+          await fs.unlink(target).catch(() => undefined);
+          this.previewTickInFlight = false;
         }
       }
-      if (this.previewLoopActive) setTimeout(() => void tick(), interval)
-    }
 
-    void tick()
+      if (this.previewLoopActive) {
+        setTimeout(() => void tick(), interval);
+      }
+    };
+
+    // Start Live View once before requesting the first frame.
+    void this.command<unknown>("startliveview", { index: cameraIndex }, 20_000)
+      .then(() => {
+        if (this.previewLoopActive) {
+          void tick();
+        } else {
+          // The preview may have been stopped while startup was in progress.
+          return this.command<unknown>(
+            "stopliveview",
+            { index: cameraIndex },
+            20_000,
+          );
+        }
+      })
+      .catch((error) => {
+        if (this.previewLoopActive) {
+          console.warn("[CameraService] Failed to start Live View:", error);
+          this.previewLoopActive = false;
+          this.previewTarget = null;
+        }
+      });
   }
 
   stopPreviewLoop(): void {
-    this.previewLoopActive = false
-    this.previewTarget = null
-    if (this.previewStarted) {
-      void this.windowCommand('LiveViewWnd_Hide')
-        .catch((error) => console.warn('[CameraService] Failed to hide live view:', error))
-        .finally(() => { this.previewStarted = false })
+    const wasActive = this.previewLoopActive;
+    const cameraIndex = this.connectedIndex;
+
+    this.previewLoopActive = false;
+    this.previewTarget = null;
+
+    if (wasActive && cameraIndex >= 0) {
+      // Queued after any in-flight frame, so Live View stops cleanly.
+      void this.command<unknown>(
+        "stopliveview",
+        { index: cameraIndex },
+        20_000,
+      ).catch((error) => {
+        console.warn("[CameraService] Failed to stop Live View:", error);
+      });
     }
   }
 }
 
-export const cameraService = new CameraService()
+export const cameraService = new CameraService();
