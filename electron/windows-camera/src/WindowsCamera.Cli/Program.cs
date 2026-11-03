@@ -24,7 +24,10 @@ internal static class Program
     private static bool _verbose;
     private static bool _json;
 
-    private static readonly TaskCompletionSource<string> CaptureCompletion =
+    private static ICameraDevice? _liveViewDevice;
+    private static bool _liveViewStarted;
+
+    private static TaskCompletionSource<string> CaptureCompletion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -60,6 +63,11 @@ internal static class Program
             }
 
             Log($"Connected: {device.DisplayName}");
+
+            if (options.ContainsKey("session"))
+            {
+                return RunSession(device);
+            }
 
             // ---------------------------------------------------------
             // LIST
@@ -234,7 +242,8 @@ internal static class Program
             "list",
             "status",
             "get-config",
-            "capture"
+            "capture",
+            "session"
         };
 
         for (var i = 0; i < args.Length; i++)
@@ -370,6 +379,242 @@ internal static class Program
         }
 
         return null;
+    }
+
+
+    private static int RunSession(ICameraDevice device)
+    {
+        var jsonOptions = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        };
+
+        string? line;
+
+        while ((line = Console.ReadLine()) != null)
+        {
+            SessionRequest? request = null;
+
+            try
+            {
+                request = JsonSerializer.Deserialize<SessionRequest>(
+                    line,
+                    jsonOptions);
+
+                if (request == null ||
+                    string.IsNullOrWhiteSpace(request.Action))
+                {
+                    throw new ArgumentException("Missing action.");
+                }
+
+                var action = request.Action.Trim().ToLowerInvariant();
+
+                if (action == "shutdown")
+                {
+                    StopLiveView(device);
+
+                    WriteSessionResponse(new
+                    {
+                        id = request.Id,
+                        ok = true,
+                        result = new { shutdown = true }
+                    });
+
+                    break;
+                }
+
+                object? result;
+
+                if (action == "list")
+                {
+                    result = ServiceProvider.DeviceManager
+                        .ConnectedDevices
+                        .Select((camera, index) => new
+                        {
+                            index,
+                            model = camera.DeviceName,
+                            name = camera.DisplayName,
+                            port = camera.PortName,
+                            connected = camera.IsConnected
+                        })
+                        .ToList();
+                }
+                else
+                {
+                    // Apply optional settings before executing the action.
+                    if (request.Sets != null)
+                    {
+                        foreach (var setting in request.Sets)
+                        {
+                            if (string.IsNullOrWhiteSpace(setting.Key))
+                                continue;
+
+                            Log($"Set {setting.Key}={setting.Value}");
+
+                            SetConfigValue(
+                                device,
+                                setting.Key,
+                                setting.Value);
+                        }
+                    }
+
+                    switch (action)
+                    {
+                        case "status":
+                            result = new
+                            {
+                                camera = new
+                                {
+                                    connected = device.IsConnected,
+                                    model = device.DeviceName,
+                                    name = device.DisplayName,
+                                    port = device.PortName,
+                                    busy = device.IsBusy
+                                },
+                                config = GetConfig(device)
+                            };
+                            break;
+
+                        case "set":
+                            if (string.IsNullOrWhiteSpace(request.Key))
+                                throw new ArgumentException("Missing setting key.");
+
+                            SetConfigValue(
+                                device,
+                                request.Key,
+                                request.Value ?? "");
+
+                            result = new
+                            {
+                                updated = request.Key,
+                                value = GetPropertyValue(
+                                    GetProperty(device, request.Key))
+                            };
+                            break;
+
+                        case "capture":
+                            {
+                                // Live View must stop before normal photo capture.
+                                StopLiveView(device);
+
+                                _outputFile = string.IsNullOrWhiteSpace(request.Out)
+                                    ? Path.Combine(
+                                        Path.GetTempPath(),
+                                        $"capture-{Guid.NewGuid():N}.jpg")
+                                    : Path.GetFullPath(request.Out);
+
+                                // A fresh completion source for every capture.
+                                CaptureCompletion = new TaskCompletionSource<string>(
+                                    TaskCreationOptions.RunContinuationsAsynchronously);
+
+                                var timeout = TimeSpan.FromSeconds(
+                                    request.TimeoutSeconds > 0
+                                        ? request.TimeoutSeconds
+                                        : 120);
+
+                                Log($"Capture output: {_outputFile}");
+
+                                Capture(device);
+
+                                var savedFile = WaitForCapture(timeout);
+
+                                result = new
+                                {
+                                    path = savedFile,
+                                    bytes = new System.IO.FileInfo(savedFile).Length
+                                };
+
+                                break;
+                            }
+
+                        case "startliveview":
+                        case "start-liveview":
+                            {
+                                StartLiveView(device);
+
+                                result = new { started = true };
+                                break;
+                            }
+
+                        case "liveview":
+                        case "liveviewframe":
+                        case "liveview-frame":
+                            {
+                                var timeout = TimeSpan.FromSeconds(
+                                    request.TimeoutSeconds > 0
+                                        ? request.TimeoutSeconds
+                                        : 15);
+
+                                var bytes = GetLiveViewFrame(device, timeout);
+
+                                var path = string.IsNullOrWhiteSpace(request.Out)
+                                    ? Path.Combine(
+                                        Path.GetTempPath(),
+                                        $"liveview-{Guid.NewGuid():N}.jpg")
+                                    : Path.GetFullPath(request.Out);
+
+                                Directory.CreateDirectory(
+                                    Path.GetDirectoryName(path)!);
+
+                                // Synchronous write: keep this session on its STA thread.
+                                File.WriteAllBytes(path, bytes);
+
+                                result = new
+                                {
+                                    path,
+                                    bytes = bytes.Length
+                                };
+
+                                break;
+                            }
+
+                        case "stopliveview":
+                        case "stop-liveview":
+                            {
+                                StopLiveView(device);
+
+                                result = new { stopped = true };
+                                break;
+                            }
+
+                        default:
+                            throw new ArgumentException(
+                                $"Unknown session action \"{request.Action}\".");
+                    }
+                }
+
+                WriteSessionResponse(new
+                {
+                    id = request.Id,
+                    ok = true,
+                    result
+                });
+            }
+            catch (Exception ex)
+            {
+                WriteSessionResponse(new
+                {
+                    id = request?.Id,
+                    ok = false,
+                    error = ex.Message
+                });
+
+                Log(ex.ToString());
+            }
+        }
+
+        StopLiveView(device);
+
+        return 0;
+    }
+
+
+    private static void WriteSessionResponse(object response)
+    {
+        Console.Out.WriteLine(
+            JsonSerializer.Serialize(response));
+
+        Console.Out.Flush();
     }
 
     // ================================================================
@@ -743,6 +988,125 @@ internal static class Program
         }
     }
 
+    private static void StartLiveView(ICameraDevice device)
+    {
+        if (_liveViewStarted &&
+            ReferenceEquals(_liveViewDevice, device))
+        {
+            return;
+        }
+
+        try
+        {
+            Log("Starting Live View...");
+
+            device.StartLiveView();
+
+            _liveViewDevice = device;
+            _liveViewStarted = true;
+
+            Log("Live View started.");
+        }
+        catch (Exception ex)
+        {
+            _liveViewDevice = null;
+            _liveViewStarted = false;
+
+            Log($"Failed to start Live View: {ex}");
+
+            throw;
+        }
+    }
+
+
+    private static byte[] GetLiveViewFrame(
+        ICameraDevice device,
+        TimeSpan timeout)
+    {
+        StartLiveView(device);
+
+        var deadline = DateTime.UtcNow + timeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                var data = device.GetLiveViewImage();
+
+                if (data?.ImageData is { Length: > 0 } image)
+                {
+                    var offset = Math.Clamp(
+                        data.ImageDataPosition,
+                        0,
+                        image.Length);
+
+                    if (offset < image.Length)
+                    {
+                        return image.AsSpan(offset).ToArray();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Live View frame read warning: {ex.Message}");
+            }
+
+            Thread.Sleep(50);
+        }
+
+        throw new TimeoutException(
+            $"Live View frame timed out after {timeout.TotalSeconds} seconds.");
+    }
+
+
+
+    private static void StopLiveView(ICameraDevice device)
+    {
+        if (!_liveViewStarted)
+            return;
+
+        var liveViewDevice = _liveViewDevice ?? device;
+
+        // Clear state before stopping.
+        _liveViewDevice = null;
+        _liveViewStarted = false;
+
+        try
+        {
+            Log("Stopping Live View...");
+
+            // Allow any outstanding frame request to finish.
+            Thread.Sleep(500);
+
+            liveViewDevice.StopLiveView();
+
+            Log("Live View stopped.");
+        }
+        catch (Exception ex)
+        {
+            Log($"Failed to stop Live View: {ex}");
+        }
+    }
+
+
+    private static byte[] ExtractJpeg(dynamic? data)
+    {
+        if (data?.ImageData is not byte[] raw ||
+            raw.Length == 0)
+        {
+            return Array.Empty<byte>();
+        }
+
+        var offset = Math.Clamp(
+            (int)data.ImageDataPosition,
+            0,
+            raw.Length);
+
+        return offset == 0
+            ? raw
+            : raw[offset..];
+    }
+
     // ================================================================
     // OUTPUT
     // ================================================================
@@ -810,4 +1174,30 @@ internal static class Program
           WindowsCamera.exe --capture --out .\test.jpg --timeout 60 --json --verbose
         """);
     }
+}
+
+internal sealed class SessionRequest
+{
+    public string? Id { get; set; }
+
+    public string Action { get; set; } = "";
+
+    public int Index { get; set; }
+
+    public string? Key { get; set; }
+
+    public string? Value { get; set; }
+
+    public string? Out { get; set; }
+
+    public int TimeoutSeconds { get; set; }
+
+    public List<SessionSetting>? Sets { get; set; }
+}
+
+internal sealed class SessionSetting
+{
+    public string Key { get; set; } = "";
+
+    public string Value { get; set; } = "";
 }
