@@ -34,6 +34,7 @@ const startSession = () => {
     if (activeEvent.value?.is_paid_event) {
         startMutation.mutate(activeEvent.value.id, {
             onSuccess: () => {
+                // console.log("RESP PAID" + resp)
                 router.push({ name: 'payment' })
             },
             onError: (err) => {

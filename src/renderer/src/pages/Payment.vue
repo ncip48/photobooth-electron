@@ -14,6 +14,8 @@ import VoucherPanel from '@/components/Payment/VoucherPanel.vue'
 import { usePayment, usePaymentCountdown } from '@/composables/usePayment'
 import { useActiveEvent } from '@/composables/useEvents'
 
+const router = useRouter()
+
 /* =========================================================
    Active event
    ========================================================= */
@@ -24,6 +26,9 @@ const { data: event, isLoading: eventLoading } = useActiveEvent()
    ========================================================= */
 const {
     draftId,
+    qrisCreation,
+    qrisData,
+    paymentStatus,
     confirmQris,
     redeemVoucher,
     cancelPayment,
@@ -31,13 +36,17 @@ const {
     isRedeemingVoucher,
     isCancelling,
     goToStart,
+    goToCapture
 } = usePayment()
 
 /* Guard: kalau tidak ada draft, redirect ke start */
-onMounted(() => {
+onMounted(async () => {
     if (!draftId.value) {
         goToStart()
+        return
     }
+
+    await qrisCreation()
 })
 
 /* =========================================================
@@ -66,6 +75,7 @@ const {
 
 /* Restart timer kalau event baru dimuat */
 import { watch } from 'vue'
+import { useRouter } from 'vue-router'
 watch(timePayment, (val) => {
     if (val > 0) startTimer()
 })
@@ -103,7 +113,36 @@ onBeforeUnmount(() => {
 /* =========================================================
    Props pass ke panel
    ========================================================= */
-const qrisPayload = ref('HELORABOOTH-QRIS-DEMO')
+const qrisPayload = computed(() => {
+    return qrisData.value?.payment?.payment_number ?? ''
+})
+const qrisMerchant = computed(() => {
+    return qrisData.value?.payment?.merchant_name ?? ''
+})
+const qrisOrderId = computed(() => {
+    return qrisData.value?.payment?.order_id ?? ''
+})
+const paymentStatusData = computed(() => {
+    return paymentStatus.value
+})
+watch(qrisPayload, (value) => {
+    console.log('QRIS Payload:', value)
+})
+watch(paymentStatusData, (value) => {
+    if (!value) return
+    if (!value.paid) return
+    const sessionId = value.session_id
+    // goToCapture(value?.session_id)
+    if (event.value?.is_simple) {
+        // const sessionId = '01a0179e-a690-7141-8c3b-4aecc12936cb'
+        router.push({
+            name: 'select-frame',
+            params: { sessionId: String(sessionId) },
+        })
+    } else {
+        goToCapture(value?.session_id)
+    }
+})
 </script>
 
 <template>
@@ -125,14 +164,14 @@ const qrisPayload = ref('HELORABOOTH-QRIS-DEMO')
             <div class="pointer-events-none fixed right-4 top-4 z-40 sm:right-6 sm:top-6">
                 <div class="pointer-events-auto flex items-center gap-2.5 border-2 px-4 py-2.5 shadow-brutal-sm transition-colors"
                     :class="isExpired
-                            ? 'border-[#b3261e] bg-rose'
-                            : isLowTime
-                                ? 'border-ink bg-amber'
-                                : 'border-ink bg-paper-soft'
+                        ? 'border-[#b3261e] bg-rose'
+                        : isLowTime
+                            ? 'border-ink bg-amber'
+                            : 'border-ink bg-paper-soft'
                         ">
                     <ClockIcon class="h-4 w-4 shrink-0" :class="isLowTime && !isExpired
-                            ? 'animate-pulse text-ink'
-                            : 'text-ink/60'
+                        ? 'animate-pulse text-ink'
+                        : 'text-ink/60'
                         " />
                     <span class="display text-xl font-bold leading-none tracking-tight tabular-nums text-ink">
                         {{ mmss }}
@@ -150,8 +189,8 @@ const qrisPayload = ref('HELORABOOTH-QRIS-DEMO')
                         <button type="button" role="tab"
                             class="display flex flex-1 items-center justify-center gap-2.5 border-r-2 border-ink px-4 py-4 text-[14px] font-bold transition-colors"
                             :class="activeMethod === 'qris'
-                                    ? 'bg-ink text-white'
-                                    : 'bg-transparent text-ink hover:bg-lime'
+                                ? 'bg-ink text-white'
+                                : 'bg-transparent text-ink hover:bg-lime'
                                 " :aria-selected="activeMethod === 'qris'" @click="activeMethod = 'qris'">
                             <QrCodeIcon class="h-5 w-5" />
                             <span>QRIS</span>
@@ -160,8 +199,8 @@ const qrisPayload = ref('HELORABOOTH-QRIS-DEMO')
                         <button type="button" role="tab"
                             class="display flex flex-1 items-center justify-center gap-2.5 px-4 py-4 text-[14px] font-bold transition-colors"
                             :class="activeMethod === 'voucher'
-                                    ? 'bg-ink text-white'
-                                    : 'bg-transparent text-ink hover:bg-lime'
+                                ? 'bg-ink text-white'
+                                : 'bg-transparent text-ink hover:bg-lime'
                                 " :aria-selected="activeMethod === 'voucher'" @click="activeMethod = 'voucher'">
                             <TicketIcon class="h-5 w-5" />
                             <span>Voucher</span>
@@ -171,8 +210,8 @@ const qrisPayload = ref('HELORABOOTH-QRIS-DEMO')
                     <!-- PANEL -->
                     <div class="card p-5 lg:p-7">
                         <QrisPanel v-if="activeMethod === 'qris'" :event="event" :qris-payload="qrisPayload"
-                            :remaining-seconds="remaining" :confirming="isConfirmingQris" :is-expired="isExpired"
-                            @confirm="confirmQris" />
+                            :qris-merchant="qrisMerchant" :order-id="qrisOrderId" :remaining-seconds="remaining"
+                            :confirming="isConfirmingQris" :is-expired="isExpired" @confirm="confirmQris" />
 
                         <VoucherPanel v-else :event="event" :is-expired="isExpired" :redeeming="isRedeemingVoucher"
                             @submit="redeemVoucher" />

@@ -6,8 +6,9 @@ import {
     ShieldCheckIcon,
     SparklesIcon,
     DevicePhoneMobileIcon,
+    ReceiptRefundIcon
 } from '@heroicons/vue/24/outline'
-import Button from '@/components/UI/Button.vue'
+// import Button from '@/components/UI/Button.vue'
 import { formatRupiah } from '@/lib/format'
 
 interface Props {
@@ -16,6 +17,8 @@ interface Props {
         price?: number
     }
     qrisPayload: string
+    qrisMerchant: string
+    orderId: string
     remainingSeconds?: number
     confirming?: boolean
     isExpired?: boolean
@@ -44,6 +47,7 @@ const steps = [
     },
     { icon: QrCodeIcon, label: 'Pilih menu Scan QRIS' },
     { icon: CheckCircleIcon, label: 'Scan & konfirmasi nominal' },
+    { icon: ReceiptRefundIcon, label: 'Otomatis terverifikasi ketika sudah membayar sesuai nominal' },
 ]
 
 function handleConfirm() {
@@ -72,10 +76,10 @@ function handleConfirm() {
             <div class="mt-4 border-2 border-ink bg-paper-soft px-4 py-3 text-center">
                 <p class="eyebrow text-ink/50">Merchant</p>
                 <p class="display mt-0.5 text-[15px] font-bold text-ink">
-                    HeloraBooth
+                    {{ qrisMerchant }}
                 </p>
                 <p class="mt-0.5 text-[11.5px] text-ink/55">
-                    NMID: ID2026HELORA
+                    Order ID: {{orderId}}
                 </p>
             </div>
         </div>
@@ -127,7 +131,7 @@ function handleConfirm() {
             </div>
 
             <!-- Action -->
-            <div class="mt-auto space-y-2 pt-2">
+            <!-- <div class="mt-auto space-y-2 pt-2">
                 <Button variant="lime" size="lg" :icon="CheckCircleIcon" full-width :loading="confirming"
                     :disabled="confirming || isExpired" @click="handleConfirm">
                     {{ confirming ? 'Memverifikasi...' : 'Sudah Bayar' }}
@@ -135,7 +139,7 @@ function handleConfirm() {
                 <p class="text-center text-[11.5px] text-ink/50">
                     Tekan tombol ini setelah Anda menyelesaikan pembayaran
                 </p>
-            </div>
+            </div> -->
         </div>
     </div>
 </template>

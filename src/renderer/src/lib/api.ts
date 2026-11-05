@@ -78,6 +78,13 @@ export const photoboothApi = {
         return data
     },
 
+    async createQris(draftId: string) {
+        const { data } = await api.post('/photobooth/payment/qris', {
+            draft_id: draftId,
+        })
+        return data
+    },
+
     async confirmQris(draftId: string) {
         const { data } = await api.post('/photobooth/payment/qris/confirm', {
             draft_id: draftId,
@@ -137,6 +144,16 @@ export const photoboothApi = {
     /* ============ Result ============ */
     async getResult(sessionId: string) {
         const { data } = await api.get(`/photobooth/result/${sessionId}`)
+        return data
+    },
+
+    async getResultQris(sessionId: string) {
+        const { data } = await api.get(`/photobooth/payment/qris/${sessionId}`)
+        return data
+    },
+
+    async getStatusQris(sessionId: string) {
+        const { data } = await api.get(`/photobooth/payment/qris/${sessionId}/status`)
         return data
     },
 

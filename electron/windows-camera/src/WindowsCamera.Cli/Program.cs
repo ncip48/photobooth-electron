@@ -15,6 +15,8 @@ using CameraControl.Core.Classes;
 using CameraControl.Devices;
 using CameraControl.Devices.Classes;
 using Canon.Eos.Framework;
+using System.ComponentModel;
+using CameraControl.Devices.Canon;
 
 namespace CameraControlCmd;
 
@@ -384,6 +386,8 @@ internal static class Program
 
     private static int RunSession(ICameraDevice device)
     {
+        SubscribeCameraPropertyChanges(device);
+
         var jsonOptions = new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true
@@ -611,10 +615,13 @@ internal static class Program
 
     private static void WriteSessionResponse(object response)
     {
-        Console.Out.WriteLine(
-            JsonSerializer.Serialize(response));
+        lock (SessionOutputLock)
+        {
+            Console.Out.WriteLine(
+                JsonSerializer.Serialize(response));
 
-        Console.Out.Flush();
+            Console.Out.Flush();
+        }
     }
 
     // ================================================================
@@ -676,6 +683,11 @@ internal static class Program
                                 "Focus Mode",
                                 device.FocusMode),
 
+                            ["mode"] = Node(
+                                "mode",
+                                "Mode",
+                                device.Mode),
+
                             ["imagequality"] = Node(
                                 "imagequality",
                                 "Image Quality",
@@ -728,6 +740,8 @@ internal static class Program
 
             "focusmode" =>
                 device.FocusMode,
+
+            "mode" => device.Mode,
 
             "exposurecompensation" or "ec" =>
                 device.ExposureCompensation,
@@ -1105,6 +1119,110 @@ internal static class Program
         return offset == 0
             ? raw
             : raw[offset..];
+    }
+
+    private static readonly object SessionOutputLock = new();
+
+    private static void SubscribeCameraPropertyChanges(
+    ICameraDevice device)
+    {
+        if (device is CanonSDKBase canon && canon.Camera != null)
+        {
+            Log("Subscribing directly to Canon EDSDK PropertyChanged...");
+
+            canon.Camera.PropertyChanged += (_, e) =>
+            {
+                try
+                {
+                    Log($"Canon EDSDK property event: 0x{e.PropertyId:X}");
+
+                    WriteSessionEvent(new
+                    {
+                        type = "camera-settings-changed",
+                        propertyId = $"0x{e.PropertyId:X}",
+
+                        settings = GetCameraSnapshot(device)
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Log($"Camera event error: {ex}");
+                }
+            };
+
+            Log("Canon EDSDK property listener attached.");
+
+            return;
+        }
+
+        Log($"Camera driver does not expose CanonSDKBase: {device.GetType().FullName}");
+
+        // Fallback for non-Canon drivers.
+        SubscribeProperty(device.Mode, "mode");
+        SubscribeProperty(device.IsoNumber, "iso");
+        SubscribeProperty(device.FNumber, "aperture");
+        SubscribeProperty(device.ShutterSpeed, "shutterspeed");
+        SubscribeProperty(device.WhiteBalance, "whitebalance");
+        SubscribeProperty(device.FocusMode, "focusmode");
+        SubscribeProperty(device.ExposureCompensation, "exposurecompensation");
+        SubscribeProperty(device.CompressionSetting, "imagequality");
+    }
+
+    private static object GetCameraSnapshot(ICameraDevice device)
+    {
+        return new
+        {
+            mode = GetPropertyValue(device.Mode),
+            iso = GetPropertyValue(device.IsoNumber),
+            aperture = GetPropertyValue(device.FNumber),
+            shutterspeed = GetPropertyValue(device.ShutterSpeed),
+            whitebalance = GetPropertyValue(device.WhiteBalance),
+            focusmode = GetPropertyValue(device.FocusMode),
+            exposurecompensation = GetPropertyValue(device.ExposureCompensation),
+            imagequality = GetPropertyValue(device.CompressionSetting)
+        };
+    }
+
+    private static void SubscribeProperty(
+        object property,
+        string propertyName)
+    {
+        Log("changing props");
+
+        if (property is not INotifyPropertyChanged observable)
+        {
+            Log($"{propertyName}: PropertyChanged is not supported.");
+            return;
+        }
+
+        observable.PropertyChanged += (_, e) =>
+        {
+            if (!string.IsNullOrEmpty(e.PropertyName) &&
+                e.PropertyName != "Value")
+            {
+                return;
+            }
+
+            var value = GetPropertyValue(property);
+
+            WriteSessionEvent(new
+            {
+                type = "camera-property-changed",
+                property = propertyName,
+                value
+            });
+        };
+    }
+
+    private static void WriteSessionEvent(object message)
+    {
+        lock (SessionOutputLock)
+        {
+            Console.Out.WriteLine(
+                JsonSerializer.Serialize(message));
+
+            Console.Out.Flush();
+        }
     }
 
     // ================================================================

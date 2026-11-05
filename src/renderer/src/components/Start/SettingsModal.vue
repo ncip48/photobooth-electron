@@ -313,6 +313,11 @@ const CAMERA_CONFIG_KEYS: CameraConfigDefinition[] = [
     label: "White Balance",
     path: ["main", "children", "imgsettings", "children", "whitebalance"],
   },
+    {
+    key: "mode",
+    label: "Mode",
+    path: ["main", "children", "imgsettings", "children", "mode"],
+  },
 ];
 
 interface ConfigNode {
