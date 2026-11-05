@@ -4,6 +4,7 @@ import {
     ExclamationTriangleIcon,
     PhotoIcon,
     XMarkIcon,
+    ArrowPathIcon,
 } from '@heroicons/vue/24/outline'
 import type { CaptureItem } from '@/composables/useCaptures'
 
@@ -15,17 +16,20 @@ const props = withDefaults(
         deletingId?: string | null
         deleteError?: string
         maxCapture?: number
+        isSimple?: boolean
     }>(),
     {
         galleryLoading: false,
         deletingId: null,
         deleteError: '',
         maxCapture: 0,
+        isSimple: false,
     }
 )
 
 const emit = defineEmits<{
     (e: 'delete', item: CaptureItem): void
+    (e: 'retake', item: CaptureItem, index: number): void
 }>()
 </script>
 
@@ -75,7 +79,8 @@ const emit = defineEmits<{
             </div>
 
             <!-- Empty -->
-            <div v-else-if="gallery.length === 0" class="grid h-full place-items-center px-4 py-10 text-center">
+            <div v-if="!galleryLoading && !isSimple && gallery.length === 0"
+                class="grid h-full place-items-center px-4 py-10 text-center">
                 <div>
                     <span class="mx-auto grid h-16 w-16 place-items-center border-2 border-ink bg-paper">
                         <CameraIcon class="h-7 w-7 text-ink/30" />
@@ -89,50 +94,78 @@ const emit = defineEmits<{
                 </div>
             </div>
 
-            <!-- List -->
-            <div v-else class="space-y-3">
-                <div v-for="(item, idx) in gallery" :key="item.id ?? idx"
+            <!-- Gallery: Simple & Non-simple -->
+            <div v-else-if="!galleryLoading" class="space-y-3">
+                <div v-for="(item, idx) in (isSimple ? Array.from({ length: maxCapture }, (_, i) => gallery[i] ?? null) : gallery)"
+                    :key="item?.id ?? `slot-${idx}`"
                     class="group relative overflow-hidden border-2 border-ink bg-paper-soft">
-                    <img :src="item.thumbnail_url || item.url" :alt="item.filename" class="block w-full object-cover"
-                        :class="[
-                            item.uploading && 'opacity-70',
-                            item.failed && 'grayscale',
-                        ]" />
+                    <template v-if="item">
+                        <img :src="item.thumbnail_url || item.url" :alt="item.filename"
+                            class="block w-full object-cover" :class="[
+                                item.uploading && 'opacity-70',
+                                item.failed && 'grayscale',
+                            ]" />
 
-                    <div
+                        <!-- Number -->
+                        <div
+                            class="display absolute left-2 top-2 grid h-7 w-7 place-items-center border-2 border-ink bg-lime text-[11px] font-bold text-ink">
+                            {{ idx + 1 }}
+                        </div>
+
+                        <!-- Uploading overlay -->
+                        <div v-if="item.uploading"
+                            class="absolute inset-0 grid place-items-center bg-ink/40 backdrop-blur-sm">
+                            <div class="flex flex-col items-center gap-2">
+                                <div class="h-6 w-6 animate-spin border-2 border-white/30 border-t-white" />
+                                <span class="text-[10px] font-bold uppercase tracking-wider text-white">
+                                    Uploading
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Failed -->
+                        <div v-if="item.failed"
+                            class="absolute inset-0 grid place-items-center bg-rose/80 backdrop-blur-sm">
+                            <div class="flex flex-col items-center gap-2 px-3 text-center">
+                                <ExclamationTriangleIcon class="h-6 w-6 text-ink" />
+                                <span class="text-[10px] font-bold uppercase tracking-wider text-ink">
+                                    Gagal Upload
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Action -->
+                        <button v-if="isSimple || !item.uploading" type="button"
+                            class="absolute right-2 top-2 grid h-8 w-8 place-items-center border-2 border-ink text-ink shadow-brutal-sm transition-all active:translate-y-0.5 disabled:cursor-wait disabled:opacity-60"
+                            :class="isSimple
+                                    ? 'bg-lime hover:bg-amber'
+                                    : 'bg-rose hover:bg-[#b3261e] hover:text-white'
+                                " :disabled="item.uploading || deletingId === item.id"
+                            :aria-label="isSimple ? `Retake foto ${idx + 1}` : `Hapus foto ${idx + 1}`"
+                            :title="isSimple ? 'Retake foto' : 'Hapus foto'" @click.stop="
+                                isSimple
+                                    ? emit('retake', item, idx)
+                                    : emit('delete', item)
+                                ">
+                            <ArrowPathIcon v-if="isSimple" class="h-4 w-4" />
+                            <XMarkIcon v-else class="h-4 w-4" :class="deletingId === item.id && 'animate-pulse'" />
+                        </button>
+                    </template>
+
+                    <!-- Empty Slot: Simple -->
+                    <div v-else class="grid aspect-[3/4] place-items-center border-dashed border-ink/30 bg-paper">
+                        <div class="flex flex-col items-center gap-2 text-ink/35">
+                            <CameraIcon class="h-8 w-8" />
+                            <span class="text-xs font-bold">Foto {{ idx + 1 }}</span>
+                            <span class="text-[10px]">Belum diambil</span>
+                        </div>
+                    </div>
+
+                    <!-- Number for empty slot -->
+                    <div v-if="!item"
                         class="display absolute left-2 top-2 grid h-7 w-7 place-items-center border-2 border-ink bg-lime text-[11px] font-bold text-ink">
                         {{ idx + 1 }}
                     </div>
-
-                    <!-- Uploading overlay -->
-                    <div v-if="item.uploading"
-                        class="absolute inset-0 grid place-items-center bg-ink/40 backdrop-blur-sm">
-                        <div class="flex flex-col items-center gap-2">
-                            <div class="h-6 w-6 animate-spin border-2 border-white/30 border-t-white" />
-                            <span class="text-[10px] font-bold uppercase tracking-wider text-white">
-                                Uploading
-                            </span>
-                        </div>
-                    </div>
-
-                    <!-- Failed -->
-                    <div v-if="item.failed"
-                        class="absolute inset-0 grid place-items-center bg-rose/80 backdrop-blur-sm">
-                        <div class="flex flex-col items-center gap-2 px-3 text-center">
-                            <ExclamationTriangleIcon class="h-6 w-6 text-ink" />
-                            <span class="text-[10px] font-bold uppercase tracking-wider text-ink">
-                                Gagal Upload
-                            </span>
-                        </div>
-                    </div>
-
-                    <!-- Delete -->
-                    <button v-if="!item.uploading" type="button"
-                        class="absolute right-2 top-2 grid h-8 w-8 place-items-center border-2 border-ink bg-rose text-ink shadow-brutal-sm transition-all active:translate-y-0.5 hover:bg-[#b3261e] hover:text-white disabled:cursor-wait disabled:opacity-60"
-                        :disabled="deletingId === item.id" :aria-label="`Hapus foto ${idx + 1}`" title="Hapus foto"
-                        @click.stop="emit('delete', item)">
-                        <XMarkIcon class="h-4 w-4" :class="deletingId === item.id && 'animate-pulse'" />
-                    </button>
                 </div>
             </div>
         </div>

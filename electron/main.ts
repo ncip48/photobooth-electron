@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, globalShortcut } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc'
@@ -37,11 +37,27 @@ function createWindow(): void {
     }
 }
 
+function registerBluetoothShutter() {
+    const registered = globalShortcut.register('VolumeUp', () => {
+        console.log('[Bluetooth Shutter] Volume Up detected')
+
+        if (!mainWindow || mainWindow.isDestroyed()) return
+
+        mainWindow.webContents.send('shutter:pressed')
+    })
+
+    console.log(
+        '[Bluetooth Shutter] Registration:',
+        registered ? 'SUCCESS' : 'FAILED'
+    )
+}
+
 app.whenReady().then(() => {
     electronApp.setAppUserModelId('id.helorabooth.photobooth')
     app.on('browser-window-created', (_, w) => optimizer.watchWindowShortcuts(w))
     registerIpcHandlers(ipcMain)
     createWindow()
+    registerBluetoothShutter()
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
@@ -49,4 +65,8 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('will-quit', () => {
+    globalShortcut.unregister('VolumeUp')
 })

@@ -198,27 +198,28 @@ const skipReview = () => stopReview()
    ========================================================= */
 const takePicture = async () => {
     if (capturing.value || isExpired.value || reviewingPhoto.value) return
+
     if (!event.value) {
         captureError.value = 'Event belum dimuat.'
         return
     }
-    console.log(connected)
-    // if (!connected.value) {
-    //     captureError.value = 'Kamera belum terhubung. bro'
-    //     return
-    // }
+
+    // Simpan target sebelum proses capture dimulai.
+    const target = retakeTarget.value
 
     capturing.value = true
     captureError.value = ''
 
-    const countdownFrom = event.value.countdown_timer ?? 3
-    for (let i = countdownFrom; i > 0; i--) {
-        countdown.value = i
-        await new Promise((r) => setTimeout(r, 1000))
-    }
-    countdown.value = 0
-
     try {
+        const countdownFrom = event.value.countdown_timer ?? 3
+
+        for (let i = countdownFrom; i > 0; i--) {
+            countdown.value = i
+            await new Promise((r) => setTimeout(r, 1000))
+        }
+
+        countdown.value = 0
+
         const data = await captureFromCamera()
         if (!data?.data) throw new Error('Gagal mengambil gambar.')
 
@@ -233,12 +234,22 @@ const takePicture = async () => {
             created_at: new Date().toISOString(),
         })
 
-        uploadCapture(data.data, 'image/jpeg', tempId).catch((err) => {
+        // Target retake diteruskan ke uploadCapture.
+        uploadCapture(
+            data.data,
+            'image/jpeg',
+            tempId,
+            target ?? undefined
+        ).catch((err) => {
             console.error('Upload failed:', err)
         })
+
+        retakeTarget.value = null
     } catch (err: any) {
         console.error('Capture failed:', err)
         captureError.value = err?.message ?? 'Gagal mengambil gambar.'
+
+        // Target tetap bisa dicoba lagi jika capture gagal.
     } finally {
         capturing.value = false
     }
@@ -335,6 +346,37 @@ onBeforeUnmount(() => {
     stopPreview()
     window.removeEventListener('keydown', onKeydown)
 })
+
+const isCapturing = ref(false)
+
+let unsubscribeShutter: (() => void) | undefined
+
+onMounted(() => {
+    unsubscribeShutter = window.electron.shutter.onPressed(() => {
+        console.log('[Bluetooth Shutter] Triggered')
+
+        if (isCapturing.value) return
+
+        takePicture()
+        // alert("Kepencet cuy")
+    })
+})
+
+onBeforeUnmount(() => {
+    unsubscribeShutter?.()
+})
+
+const retakeTarget = ref<{
+    item: CaptureItem
+    index: number
+} | null>(null)
+
+const retakePhoto = (item: CaptureItem, index: number) => {
+    if (capturing.value || item.uploading || reviewingPhoto.value) return
+
+    retakeTarget.value = { item, index }
+    takePicture()
+}
 </script>
 
 <template>
@@ -344,8 +386,8 @@ onBeforeUnmount(() => {
             <!-- KIRI: Gallery -->
             <aside class="order-2 flex min-h-0 flex-col lg:order-1">
                 <CaptureGallery :gallery="gallery" :total-captures="totalCaptures" :gallery-loading="galleryLoading"
-                    :deleting-id="deletingId" :delete-error="deleteError" @delete="deletePhoto"
-                    :max-capture="totalDropzone" />
+                    :deleting-id="deletingId" :delete-error="deleteError" :max-capture="totalDropzone"
+                    :is-simple="isSimpleMode" @delete="deletePhoto" @retake="retakePhoto" />
             </aside>
 
             <!-- KANAN: Stage + Actions -->

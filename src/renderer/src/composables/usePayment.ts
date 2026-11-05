@@ -145,21 +145,46 @@ export function usePayment() {
   /* =========================================================
        Voucher redeem
        ========================================================= */
+  interface RedeemVoucherPayload {
+    code: string;
+    is_simple: boolean;
+  }
+
   const voucherMutation = useMutation({
-    mutationFn: async (code: string) => {
-      if (!draftId.value) throw new Error("Draft pembayaran tidak ditemukan.");
+    mutationFn: async ({ code, is_simple }: RedeemVoucherPayload) => {
+      if (!draftId.value) {
+        throw new Error("Draft pembayaran tidak ditemukan.");
+      }
+
       const res = await photoboothApi.redeemVoucher(draftId.value, code);
-      if (!res.success) throw new Error(res.message ?? "Voucher tidak valid.");
+
+      if (!res.success) {
+        throw new Error(res.message ?? "Voucher tidak valid.");
+      }
+
       return res;
     },
-    onSuccess: (data) => {
+
+    onSuccess: (data, variables) => {
       const sessionId = data?.session_id ?? data?.id;
+
       if (!sessionId) {
         error.value = "Session ID tidak diterima dari server.";
         return;
       }
-      goToCapture(sessionId);
+
+      localStorage.removeItem("payment:method");
+
+      if (variables.is_simple) {
+        router.push({
+          name: "select-frame",
+          params: { sessionId: String(sessionId) },
+        });
+      } else {
+        goToCapture(sessionId);
+      }
     },
+
     onError: (err: any) => {
       error.value =
         err?.response?.data?.message ??
@@ -172,9 +197,9 @@ export function usePayment() {
        Cancel
        ========================================================= */
   const cancelMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (orderId: string | null) => {
       if (!draftId.value) return { success: true };
-      const res = await photoboothApi.cancelPayment(draftId.value);
+      const res = await photoboothApi.cancelPayment(draftId.value, orderId);
       return res;
     },
     onSuccess: () => {
@@ -256,8 +281,8 @@ export function usePaymentCountdown(
     }
   }
 
-  onMounted(start);
-  onBeforeUnmount(stop);
+  // onMounted(start);
+  // onBeforeUnmount(stop);
 
   return {
     remaining,
@@ -276,6 +301,7 @@ export interface ResultData {
     order_id: string;
     status: string;
     amount: number;
+    charged_amount: number;
     payment_number: string;
     merchant_name: string;
   };

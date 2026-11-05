@@ -19,6 +19,8 @@ interface Props {
     qrisPayload: string
     qrisMerchant: string
     orderId: string
+    amount: number
+    chargedAmount: number
     remainingSeconds?: number
     confirming?: boolean
     isExpired?: boolean
@@ -92,7 +94,7 @@ function handleConfirm() {
                     <div class="min-w-0">
                         <p class="eyebrow text-ink/60">Total Pembayaran</p>
                         <p class="display mt-2 text-4xl font-bold leading-none tracking-tight text-ink lg:text-5xl">
-                            {{ formatRupiah(event.price ?? 0) }}
+                            {{ formatRupiah(chargedAmount ?? 0) }}
                         </p>
                         <p class="mt-2.5 text-[12.5px] text-ink/65">
                             {{ event.title }}

@@ -19,14 +19,14 @@ const emit = defineEmits<{
 <template>
     <div class="flex w-full max-w-5xl flex-col items-center text-center">
         <!-- Eyebrow -->
-        <div
+        <!-- <div
             class="slide-in-down eyebrow mb-8 inline-flex items-center gap-3 border border-lime/40 bg-ink/50 px-4 py-2 backdrop-blur-md">
             <span class="relative flex h-2 w-2 items-center justify-center">
                 <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-lime opacity-75" />
                 <span class="relative inline-flex h-2 w-2 rounded-full bg-lime" />
             </span>
             <span class="text-lime">Sesi Photobooth Siap</span>
-        </div>
+        </div> -->
 
         <!-- Title -->
         <h1
