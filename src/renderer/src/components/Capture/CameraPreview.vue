@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
     CameraIcon,
     ArrowPathIcon,
@@ -104,6 +104,105 @@ const initializeCamera = async () => {
     }
 }
 
+
+const previewImage = ref<HTMLImageElement | null>(null)
+const recordingCanvas = ref<HTMLCanvasElement | null>(null)
+
+let animationFrameId: number | null = null
+
+const drawCanvas = () => {
+    const image = previewImage.value
+    const canvas = recordingCanvas.value
+
+    if (!image || !canvas) {
+        animationFrameId = requestAnimationFrame(drawCanvas)
+        return
+    }
+
+    const ctx = canvas.getContext('2d')
+
+    if (!ctx) return
+
+    if (image.complete && image.naturalWidth > 0) {
+        const scale = Math.min(
+            canvas.width / image.naturalWidth,
+            canvas.height / image.naturalHeight,
+        )
+
+        const width = image.naturalWidth * scale
+        const height = image.naturalHeight * scale
+
+        const x = (canvas.width - width) / 2
+        const y = (canvas.height - height) / 2
+
+        ctx.fillStyle = '#000000'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+        ctx.drawImage(image, x, y, width, height)
+    }
+
+    animationFrameId = requestAnimationFrame(drawCanvas)
+}
+
+watch(livePreviewUrl, async (url) => {
+    if (!url) return
+
+    await nextTick()
+
+    if (animationFrameId === null) {
+        animationFrameId = requestAnimationFrame(drawCanvas)
+    }
+})
+
+const recordMotion = (durationMs = 3000): Promise<Blob> => {
+    const canvas = recordingCanvas.value
+
+    if (!canvas) {
+        throw new Error('Canvas belum siap')
+    }
+
+    const stream = canvas.captureStream(15)
+
+    const mimeType = 'video/webm;codecs=vp8'
+
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+        stream.getTracks().forEach(track => track.stop())
+        throw new Error('WebM VP8 tidak didukung')
+    }
+
+    const recorder = new MediaRecorder(stream, {
+        mimeType,
+        videoBitsPerSecond: 5_000_000,
+    })
+
+    const chunks: Blob[] = []
+
+    return new Promise((resolve, reject) => {
+        recorder.ondataavailable = (event) => {
+            if (event.data.size > 0) chunks.push(event.data)
+        }
+
+        recorder.onerror = () => {
+            stream.getTracks().forEach(track => track.stop())
+            reject(new Error('Gagal merekam Motion Photo'))
+        }
+
+        recorder.onstop = () => {
+            stream.getTracks().forEach(track => track.stop())
+
+            resolve(new Blob(chunks, { type: mimeType }))
+        }
+
+        recorder.start()
+
+        window.setTimeout(() => {
+            if (recorder.state === 'recording') {
+                recorder.stop()
+            }
+        }, durationMs)
+    })
+}
+
 /* =========================================================
    Manual connect (fallback)
    ========================================================= */
@@ -131,6 +230,7 @@ defineExpose({
     isConnected: () => connected.value,
     disconnectCamera: () => disconnect(),
     reconnect: () => initializeCamera(),
+    recordMotion,
 })
 
 /* =========================================================
@@ -144,6 +244,11 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
     stopPreview()
+
+    if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId)
+        animationFrameId = null
+    }
 })
 
 /* =========================================================
@@ -159,8 +264,14 @@ const showEmptyState = computed(() => !livePreviewUrl.value && !isLoading.value)
 <template>
     <div class="relative flex h-full w-full items-center justify-center"
         :class="orientation === 'landscape' ? 'aspect-video' : 'aspect-[3/4]'">
+
+        <!-- Canvas untuk recording -->
+        <canvas v-if="livePreviewUrl" ref="recordingCanvas" class="pointer-events-none absolute -left-[99999px]"
+            width="1920" height="1080" />
+
         <!-- ============ LIVE PREVIEW ============ -->
-        <img v-if="livePreviewUrl" :src="livePreviewUrl" alt="Live preview" class="h-full w-full object-contain" />
+        <img v-if="livePreviewUrl" ref="previewImage" :src="livePreviewUrl" alt="Live preview"
+            class="h-full w-full object-contain" />
 
         <!-- ============ LOADING STATE ============ -->
         <div v-else-if="isLoading" class="flex flex-col items-center gap-4 px-6 py-10 text-center">

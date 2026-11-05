@@ -193,6 +193,57 @@ const stopReview = () => {
 
 const skipReview = () => stopReview()
 
+const sleep = (ms: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+interface MotionCaptureResult {
+    photo: {
+        base64: string
+        mimeType: string
+        filename: string
+    }
+    motion: Blob
+}
+
+const captureMotionPhoto = async (
+    durationMs = 3000,
+): Promise<MotionCaptureResult> => {
+    const cameraPreview = stageRef.value?.cameraRef
+
+    if (!cameraPreview) {
+        throw new Error('CameraPreview belum tersedia')
+    }
+
+    if (typeof cameraPreview.recordMotion !== 'function') {
+        throw new Error('Method recordMotion belum tersedia')
+    }
+
+    // Recording langsung dimulai
+    const motionPromise = cameraPreview.recordMotion(durationMs)
+
+    try {
+        const res = await captureFromCamera()
+
+        if (!res?.data) {
+            throw new Error('Gagal mengambil gambar.')
+        }
+
+        const motion = await motionPromise
+
+        return {
+            photo: {
+                base64: res.data,
+                mimeType: 'image/jpeg',
+                filename: `capture-${Date.now()}.jpg`,
+            },
+            motion,
+        }
+    } catch (error) {
+        motionPromise.catch(() => { })
+        throw error
+    }
+}
+
 /* =========================================================
    Take picture
    ========================================================= */
@@ -204,7 +255,6 @@ const takePicture = async () => {
         return
     }
 
-    // Simpan target sebelum proses capture dimulai.
     const target = retakeTarget.value
 
     capturing.value = true
@@ -213,44 +263,77 @@ const takePicture = async () => {
     try {
         const countdownFrom = event.value.countdown_timer ?? 3
 
+        // Mulai merekam tepat saat countdown dimulai
+        const motionPromise = stageRef.value?.cameraRef?.recordMotion(countdownFrom * 1000 + 1500)
+
+        if (!motionPromise) {
+            throw new Error('Motion recording belum tersedia')
+        }
+
         for (let i = countdownFrom; i > 0; i--) {
             countdown.value = i
-            await new Promise((r) => setTimeout(r, 1000))
+            await new Promise((resolve) => setTimeout(resolve, 1000))
         }
 
         countdown.value = 0
 
-        const data = await captureFromCamera()
-        if (!data?.data) throw new Error('Gagal mengambil gambar.')
+        // Ambil foto DSLR setelah countdown
+        const res = await captureFromCamera()
+
+        if (!res?.data) {
+            throw new Error('Gagal mengambil gambar.')
+        }
+
+        // Tunggu video selesai
+        const motion = await motionPromise
+
+        const photo = {
+            base64: res.data,
+            mimeType: 'image/jpeg',
+            filename: `capture-${Date.now()}.jpg`,
+        }
+
+        console.log('[Motion Photo]', {
+            photoSize: photo.base64.length,
+            motionSize: motion.size,
+            motionType: motion.type,
+        })
 
         const tempId = `temp-${Date.now()}`
 
         startReview({
             id: tempId,
-            filename: `capture-${Date.now()}.jpg`,
-            url: data.data,
+            filename: photo.filename,
+            url: photo.base64,
             uploading: true,
             failed: false,
             created_at: new Date().toISOString(),
         })
 
-        // Target retake diteruskan ke uploadCapture.
         uploadCapture(
-            data.data,
-            'image/jpeg',
+            photo.base64,
+            photo.mimeType,
             tempId,
             target ?? undefined
         ).catch((err) => {
             console.error('Upload failed:', err)
         })
 
+        // Debug: download Motion Photo
+        const motionUrl = URL.createObjectURL(motion)
+        const a = document.createElement('a')
+        a.href = motionUrl
+        a.download = `motion-${Date.now()}.webm`
+        a.click()
+
+        setTimeout(() => URL.revokeObjectURL(motionUrl), 60_000)
+
         retakeTarget.value = null
     } catch (err: any) {
         console.error('Capture failed:', err)
         captureError.value = err?.message ?? 'Gagal mengambil gambar.'
-
-        // Target tetap bisa dicoba lagi jika capture gagal.
     } finally {
+        countdown.value = 0
         capturing.value = false
     }
 }
