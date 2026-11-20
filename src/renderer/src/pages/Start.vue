@@ -43,13 +43,13 @@ const startSession = () => {
         })
     } else {
         if (activeEvent.value?.is_simple) {
-            const sessionId = '01a0179e-a690-7141-8c3b-4aecc12936cb'
+            const sessionId = '01a1d509-9f23-73f5-bdea-1f3b91a5b324'
             router.push({
                 name: 'select-frame',
                 params: { sessionId: String(sessionId) },
             })
         } else {
-            const sessionId = '01a0179e-a690-7141-8c3b-4aecc12936cb'
+            const sessionId = '01a1d509-9f23-73f5-bdea-1f3b91a5b324'
             router.push({
                 name: 'capture',
                 params: { sessionId: String(sessionId) },
