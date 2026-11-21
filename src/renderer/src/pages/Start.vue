@@ -59,6 +59,13 @@ const startSession = () => {
 }
 
 /* =========================================================
+   Gallery
+   ========================================================= */
+const goToGallery = () => {
+    router.push('/session-gallery')
+}
+
+/* =========================================================
    Settings
    ========================================================= */
 const showSettings = ref(false)
@@ -120,6 +127,18 @@ onBeforeUnmount(() => {
             <!-- Hero -->
             <StartHero v-else :event="activeEvent" :starting="starting" @start="startSession" />
         </main>
+
+        <!-- Gallery button (bottom-left) -->
+        <button type="button"
+            class="group absolute bottom-6 left-6 z-30 flex h-14 w-14 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white/80 backdrop-blur-md transition-all duration-300 hover:scale-105 hover:bg-white/20 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+            aria-label="Open session gallery" @click="goToGallery">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24"
+                stroke="currentColor" stroke-width="1.8">
+                <rect x="3" y="3" width="18" height="18" rx="2.5" />
+                <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 15l-5-5L5 21" />
+            </svg>
+        </button>
 
         <!-- Footer -->
         <footer class="fade-in delay-900 relative z-20 flex items-center justify-center px-6 py-4 lg:px-10" />

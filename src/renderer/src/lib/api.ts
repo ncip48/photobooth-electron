@@ -2,7 +2,7 @@ import axios from "axios";
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:8000/api",
-//   timeout: 50000,
+  //   timeout: 50000,
   headers: {
     Accept: "application/json",
     "Content-Type": "application/json",
@@ -39,6 +39,11 @@ export const photoboothApi = {
 
   async getEvent(id: string) {
     const { data } = await api.get(`/photobooth/events/${id}`);
+    return data;
+  },
+
+  async getEventSessions(id: string) {
+    const { data } = await api.get(`/photobooth/events/${id}/sessions`);
     return data;
   },
 

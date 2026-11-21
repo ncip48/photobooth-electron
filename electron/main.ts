@@ -12,7 +12,7 @@ function createWindow(): void {
         // minWidth: 1024,
         // minHeight: 720,
         show: false,
-        kiosk: true,
+        // kiosk: true,
         autoHideMenuBar: true,
         backgroundColor: '#20201e',
         webPreferences: {

@@ -43,6 +43,11 @@ const router = createRouter({
             name: 'result',
             component: () => import('@/pages/Result.vue'),
         },
+        {
+            path: '/session-gallery',
+            name: 'session-gallery',
+            component: () => import('@/pages/SessionGallery.vue'),
+        }
     ],
 })
 
