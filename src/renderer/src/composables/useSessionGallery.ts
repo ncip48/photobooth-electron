@@ -13,25 +13,7 @@ export interface SessionPreview {
 
 export interface PhotoboothSession {
     id: string
-    session_number: string
-    booking_id: string | null
-    event_id: string
-    customer_id: string | null
-    session_date: string
-    session_type: string
-    location: string | null
-    start_time: string | null
-    end_time: string | null
-    total_sessions: number
     total_prints: number
-    revenue: string
-    journal_entry_id: string | null
-    link_gdrive: string | null
-    gallery_source: 'local' | 'gdrive' | string
-    notes: string | null
-    created_by: string | null
-    created_at: string
-    updated_at: string
     preview: SessionPreview | null
 }
 
