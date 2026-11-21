@@ -11,6 +11,10 @@ const { data: sessions, isLoading, isError, refetch } = useSessionGallery()
 
 const close = () => router.push({ name: 'start' })
 const retry = () => refetch()
+
+const openResult = (sessionId: string) => {
+    router.push({ name: 'result', params: { sessionId } })
+}
 </script>
 
 <template>
@@ -35,7 +39,7 @@ const retry = () => refetch()
             <SessionGalleryEmpty v-else-if="!sessions || sessions.length === 0" @retry="retry" />
 
             <div v-else class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-                <SessionCard v-for="s in sessions" :key="s.id" :session="s" />
+                <SessionCard v-for="s in sessions" :key="s.id" :session="s" @select="openResult" />
             </div>
         </main>
     </div>
